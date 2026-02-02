@@ -1,0 +1,21 @@
+{
+  "source_file": "data/source.xlsx",
+  "target_file": "data/target.xlsx",
+  "source_sheet": null,
+  "target_sheet": null,
+  "rules": [
+    {"source_col": "auteur", "target_col": "author", "weight": 1.0, "method": "fuzzy_ratio", "normalize": true},
+    {"source_col": "titre", "target_col": "title", "weight": 1.0, "method": "fuzzy_ratio", "normalize": true},
+    {"source_col": "annee", "target_col": "year", "weight": 1.0, "method": "exact", "normalize": true},
+    {"source_col": "doi", "target_col": "doi", "weight": 2.0, "method": "normalized_exact", "normalize": true}
+  ],
+  "transfer_columns": ["notes", "categorie"],
+  "overwrite_mode": "if_empty",
+  "create_missing_cols": true,
+  "suffix_on_collision": "_src",
+  "min_score": 0.0,
+  "auto_accept_score": 95.0,
+  "top_k": 5,
+  "ambiguity_delta": 5.0,
+  "blocker": "year_or_initial"
+}

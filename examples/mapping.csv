@@ -1,0 +1,4 @@
+target_row_id,source_row_id,score,status,explanation
+0,0,100.0,auto,Auto-accept score=100.0
+1,1,99.04761904761905,auto,Auto-accept score=99.0
+2,,72.70903010033445,pending,Below threshold (score=72.7)
