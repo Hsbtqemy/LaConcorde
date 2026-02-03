@@ -1,4 +1,4 @@
-"""Crée des fichiers Excel de démonstration pour ConcordX."""
+"""Crée des fichiers Excel de démonstration pour LaConcorde."""
 
 import pandas as pd
 from pathlib import Path

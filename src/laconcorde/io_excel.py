@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from concordx.config import Config
+from laconcorde.config import Config, LaConcordeError
+
+
+class ExcelFileError(LaConcordeError):
+    """Erreur de chargement d'un fichier Excel (fichier absent, feuille inexistante)."""
 
 
 def list_sheets(filepath: str | Path) -> list[str]:
@@ -18,9 +22,18 @@ def list_sheets(filepath: str | Path) -> list[str]:
 
     Returns:
         Liste des noms de feuilles.
+
+    Raises:
+        ExcelFileError: Si le fichier est absent ou illisible.
     """
-    xl = pd.ExcelFile(filepath, engine="openpyxl")
-    return xl.sheet_names  # type: ignore[return-value]
+    path = Path(filepath)
+    if not path.exists():
+        raise ExcelFileError(f"Fichier Excel introuvable: {path}")
+    try:
+        xl = pd.ExcelFile(path, engine="openpyxl")
+        return xl.sheet_names  # type: ignore[return-value]
+    except Exception as e:
+        raise ExcelFileError(f"Impossible de lire le fichier Excel {path}: {e}") from e
 
 
 def load_sheet(
@@ -42,14 +55,34 @@ def load_sheet(
 
     Returns:
         DataFrame chargé.
+
+    Raises:
+        ExcelFileError: Si le fichier est absent, illisible ou si la feuille n'existe pas.
     """
-    xl = pd.ExcelFile(filepath, engine="openpyxl")
+    path = Path(filepath)
+    if not path.exists():
+        raise ExcelFileError(f"Fichier Excel introuvable: {path}")
+
+    try:
+        xl = pd.ExcelFile(path, engine="openpyxl")
+    except Exception as e:
+        raise ExcelFileError(f"Impossible de lire le fichier Excel {path}: {e}") from e
+
     if sheet_name is None:
         sheet_name = xl.sheet_names[0]  # type: ignore[assignment]
+    elif sheet_name not in xl.sheet_names:
+        sheets = [str(s) for s in xl.sheet_names]
+        raise ExcelFileError(
+            f"Feuille '{sheet_name}' introuvable dans {path}. Feuilles disponibles: {', '.join(sheets)}"
+        )
+
     if dtype is None:
         dtype = str  # Préserver texte par défaut
-    df = pd.read_excel(xl, sheet_name=sheet_name, dtype=dtype, engine="openpyxl")
-    return df  # type: ignore[return-value]
+    try:
+        df = pd.read_excel(xl, sheet_name=sheet_name, dtype=dtype, engine="openpyxl")
+        return df  # type: ignore[return-value]
+    except Exception as e:
+        raise ExcelFileError(f"Erreur lors du chargement de la feuille '{sheet_name}' dans {path}: {e}") from e
 
 
 def save_xlsx(

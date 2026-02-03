@@ -2,8 +2,8 @@
 
 import pandas as pd
 
-from concordx.config import FieldRule
-from concordx.matching.scorers import score_field, score_row_pair
+from laconcorde.config import FieldRule
+from laconcorde.matching.scorers import score_field, score_row_pair
 
 
 def test_score_field_exact() -> None:

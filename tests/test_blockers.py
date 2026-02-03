@@ -2,8 +2,8 @@
 
 import pandas as pd
 
-from concordx.config import FieldRule
-from concordx.matching.blockers import (
+from laconcorde.config import FieldRule
+from laconcorde.matching.blockers import (
     build_blocks,
     get_block_key_year_or_initial,
     get_candidate_source_indices,

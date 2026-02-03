@@ -5,8 +5,8 @@ from __future__ import annotations
 import pandas as pd
 from rapidfuzz import fuzz
 
-from concordx.config import FieldRule
-from concordx.normalize import norm_doi, norm_text
+from laconcorde.config import FieldRule
+from laconcorde.normalize import norm_doi, norm_text
 
 
 def score_field(

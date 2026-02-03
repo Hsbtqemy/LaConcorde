@@ -10,6 +10,7 @@
     {"source_col": "doi", "target_col": "doi", "weight": 2.0, "method": "normalized_exact", "normalize": true}
   ],
   "transfer_columns": ["notes", "categorie"],
+  "transfer_column_rename": {"notes": "commentaires", "categorie": "cat"},
   "overwrite_mode": "if_empty",
   "create_missing_cols": true,
   "suffix_on_collision": "_src",

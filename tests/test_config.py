@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from concordx.config import Config, ConfigError, FieldRule
+from laconcorde.config import Config, ConfigError, FieldRule
 
 
 def test_config_resolve_paths(tmp_path: Path) -> None:

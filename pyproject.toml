@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "concordx"
+name = "laconcorde"
 version = "0.1.0"
 description = "Outil de concordance entre tableurs Excel avec fuzzy matching multi-colonnes"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
-    {name = "ConcordX Contributors"}
+    {name = "LaConcorde Contributors"}
 ]
 keywords = ["excel", "concordance", "fuzzy-matching", "data-linking"]
 classifiers = [
@@ -37,7 +37,7 @@ dev = [
 ]
 
 [project.scripts]
-concordx = "concordx.cli:main"
+laconcorde = "laconcorde.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

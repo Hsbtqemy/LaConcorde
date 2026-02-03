@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from concordx.matching.schema import MatchResult
+from laconcorde.matching.schema import MatchResult
 
 
 def transfer_columns(
@@ -13,6 +13,7 @@ def transfer_columns(
     results: list[MatchResult],
     transfer_columns: list[str],
     *,
+    transfer_column_rename: dict[str, str] | None = None,
     overwrite_mode: str = "if_empty",
     create_missing_cols: bool = True,
     suffix_on_collision: str = "_src",
@@ -25,6 +26,7 @@ def transfer_columns(
         df_source: DataFrame source.
         results: Résultats de matching avec chosen_source_row_id.
         transfer_columns: Colonnes à transférer depuis la source.
+        transfer_column_rename: Optionnel. Mapping {nom_source: nom_cible} pour renommer.
         overwrite_mode: never, if_empty, always.
         create_missing_cols: Créer les colonnes si absentes de la cible.
         suffix_on_collision: Suffixe si colonne existe et overwrite=never.
@@ -34,14 +36,15 @@ def transfer_columns(
     """
     out = df_target.copy()
     source_cols = set(df_source.columns)
+    rename = transfer_column_rename or {}
 
     for col in transfer_columns:
         if col not in source_cols:
             continue
 
-        target_col_name = col
-        if col in out.columns and overwrite_mode == "never":
-            target_col_name = col + suffix_on_collision
+        target_col_name = rename.get(col, col)
+        if target_col_name in out.columns and overwrite_mode == "never":
+            target_col_name = target_col_name + suffix_on_collision
 
         if target_col_name not in out.columns and create_missing_cols:
             out[target_col_name] = pd.NA

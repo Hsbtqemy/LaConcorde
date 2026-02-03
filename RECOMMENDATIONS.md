@@ -1,6 +1,6 @@
-# Recommandations d'amélioration — ConcordX
+# Recommandations d'amélioration — LaConcorde
 
-Ce document recense les recommandations issues de la revue de code du projet ConcordX.
+Ce document recense les recommandations issues de la revue de code du projet LaConcorde.
 
 ---
 
@@ -47,7 +47,7 @@ La fonction `load_source_target(config: Any)` devrait utiliser le type `Config` 
 
 La version est définie à deux endroits (`__init__.py` et `pyproject.toml`). Risque de désynchronisation. Solutions possibles :
 
-- Utiliser `importlib.metadata.version("concordx")` dans `__init__.py`
+- Utiliser `importlib.metadata.version("laconcorde")` dans `__init__.py`
 - Ou lire dynamiquement depuis `pyproject.toml` au build
 
 ### 7. Performance des blockers

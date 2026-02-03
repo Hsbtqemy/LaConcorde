@@ -3,8 +3,8 @@
 import pandas as pd
 import pytest
 
-from concordx.config import Config, FieldRule
-from concordx.matching.linker import Linker
+from laconcorde.config import Config, FieldRule
+from laconcorde.matching.linker import Linker
 
 
 @pytest.fixture

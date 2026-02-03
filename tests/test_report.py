@@ -2,9 +2,9 @@
 
 import pytest
 
-from concordx.config import Config, FieldRule
-from concordx.matching.schema import MatchCandidate, MatchResult
-from concordx.report import build_report_df, print_report_console
+from laconcorde.config import Config, FieldRule
+from laconcorde.matching.schema import MatchCandidate, MatchResult
+from laconcorde.report import build_report_df, print_report_console
 
 
 @pytest.fixture
@@ -64,6 +64,6 @@ def test_print_report_console_no_error(
 ) -> None:
     print_report_console(sample_results, sample_config)
     out = capsys.readouterr().out
-    assert "ConcordX Report" in out
+    assert "LaConcorde Report" in out
     assert "Lignes cible" in out
     assert "4" in out

@@ -1,11 +1,11 @@
-"""Test d'intégration du pipeline ConcordX."""
+"""Test d'intégration du pipeline LaConcorde."""
 
 import json
 from pathlib import Path
 
 import pandas as pd
 
-from concordx.cli import cmd_run
+from laconcorde.cli import cmd_run
 
 
 def test_full_pipeline_dry_run(tmp_path: Path) -> None:

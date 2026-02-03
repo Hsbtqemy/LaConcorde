@@ -1,4 +1,4 @@
-# ConcordX
+# LaConcorde
 
 Outil de concordance entre tableurs Excel (xlsx) avec fuzzy matching multi-colonnes, validation humaine et transfert de colonnes vers un tableur cible.
 
@@ -17,7 +17,7 @@ Exécuter les commandes depuis la racine du projet.
 ### Lister les feuilles d'un fichier
 
 ```bash
-concordx list-sheets fichier.xlsx
+laconcorde list-sheets fichier.xlsx
 ```
 
 ### Créer des données de démonstration
@@ -29,7 +29,7 @@ python examples/create_sample_data.py
 ### Exécuter le linkage
 
 ```bash
-concordx run --config examples/config_example.json --output out.xlsx
+laconcorde run --config examples/config_example.json --output out.xlsx
 ```
 
 Options :
@@ -40,7 +40,7 @@ Options :
 Exemple en mode dry-run :
 
 ```bash
-concordx run --config examples/config_example.json --dry-run
+laconcorde run --config examples/config_example.json --dry-run
 ```
 
 ## Configuration (JSON)
@@ -60,6 +60,7 @@ Exemple de fichier de configuration :
     {"source_col": "doi", "target_col": "doi", "weight": 2.0, "method": "normalized_exact", "normalize": true}
   ],
   "transfer_columns": ["notes", "categorie"],
+  "transfer_column_rename": {"notes": "commentaires", "categorie": "cat"},
   "overwrite_mode": "if_empty",
   "create_missing_cols": true,
   "suffix_on_collision": "_src",
@@ -80,6 +81,7 @@ Exemple de fichier de configuration :
 | `rules` | Règles de matching : `source_col`, `target_col`, `weight`, `method`, `normalize`, `remove_diacritics` |
 | `method` | `exact`, `normalized_exact`, `fuzzy_ratio`, `token_set`, `contains` |
 | `transfer_columns` | Colonnes à transférer de la source vers la cible |
+| `transfer_column_rename` | Optionnel. Mapping `{source: cible}` pour renommer (ex: `{"notes": "commentaires"}`) |
 | `overwrite_mode` | `never`, `if_empty`, `always` |
 | `auto_accept_score` | Score au-dessus duquel on accepte automatiquement (si non ambigu) |
 | `ambiguity_delta` | Si top1 - top2 < delta → marqué ambigu |
@@ -109,6 +111,18 @@ mypy src
 pre-commit install
 pre-commit run --all-files
 ```
+
+## Exceptions
+
+En cas d'erreur, LaConcorde lève des exceptions explicites :
+
+| Exception | Cas |
+|-----------|-----|
+| `ConfigFileError` | Fichier config absent, JSON invalide |
+| `ExcelFileError` | Fichier Excel absent, feuille inexistante |
+| `ConfigError` | Configuration invalide (paramètres hors plage, etc.) |
+
+La CLI affiche le message d'erreur sur stderr et retourne le code 1.
 
 ## Licence
 

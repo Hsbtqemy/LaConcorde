@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from concordx.config import Config
-from concordx.io_excel import list_sheets, load_sheet, load_source_target, save_xlsx
+from laconcorde.config import Config
+from laconcorde.io_excel import list_sheets, load_sheet, load_source_target, save_xlsx
 
 
 def test_list_sheets(tmp_path: Path) -> None:

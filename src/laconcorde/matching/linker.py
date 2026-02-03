@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pandas as pd
 
-from concordx.config import Config
-from concordx.matching.blockers import build_blocks, get_candidate_source_indices
-from concordx.matching.schema import MatchCandidate, MatchResult
-from concordx.matching.scorers import score_row_pair
+from laconcorde.config import Config
+from laconcorde.matching.blockers import build_blocks, get_candidate_source_indices
+from laconcorde.matching.schema import MatchCandidate, MatchResult
+from laconcorde.matching.scorers import score_row_pair
 
 
 class Linker:

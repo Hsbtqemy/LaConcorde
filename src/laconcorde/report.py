@@ -6,9 +6,9 @@ from datetime import datetime
 
 import pandas as pd
 
-from concordx import __version__
-from concordx.config import Config
-from concordx.matching.schema import MatchResult
+from laconcorde import __version__
+from laconcorde.config import Config
+from laconcorde.matching.schema import MatchResult
 
 
 def build_report_df(
@@ -52,10 +52,14 @@ def build_report_df(
     for i, r in enumerate(config.rules):
         rows.append((f"rule_{i}", f"{r.source_col}->{r.target_col} w={r.weight} m={r.method}"))
 
+    transfer_info = ", ".join(config.transfer_columns)
+    if config.transfer_column_rename:
+        rename_str = ", ".join(f"{k}->{v}" for k, v in config.transfer_column_rename.items())
+        transfer_info += f" (rename: {rename_str})"
     rows.extend(
         [
             ("", ""),
-            ("Transfer columns", ", ".join(config.transfer_columns)),
+            ("Transfer columns", transfer_info),
             ("", ""),
             ("timestamp", datetime.now().isoformat()),
             ("version", __version__),
@@ -75,7 +79,7 @@ def print_report_console(results: list[MatchResult], config: Config) -> None:
     n_ambiguous = sum(1 for r in results if r.is_ambiguous)
     n_skipped = sum(1 for r in results if r.status == "skipped")
 
-    print("\n=== ConcordX Report ===")
+    print("\n=== LaConcorde Report ===")
     print(f"  Lignes cible:     {n_total}")
     print(f"  Auto-acceptés:    {n_auto}")
     print(f"  Acceptés (user):  {n_accepted}")

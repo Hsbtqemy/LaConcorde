@@ -1,6 +1,6 @@
 """Tests de normalisation."""
 
-from concordx.normalize import norm_doi, norm_text
+from laconcorde.normalize import norm_doi, norm_text
 
 
 def test_norm_text_basic() -> None:

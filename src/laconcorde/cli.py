@@ -1,4 +1,4 @@
-"""Interface en ligne de commande ConcordX."""
+"""Interface en ligne de commande LaConcorde."""
 
 from __future__ import annotations
 
@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from concordx import __version__
-from concordx.config import Config
-from concordx.io_excel import list_sheets, load_source_target, save_xlsx
-from concordx.matching.linker import Linker
-from concordx.matching.schema import MatchResult
-from concordx.report import build_report_df, print_report_console
-from concordx.transfer import build_mapping_csv, transfer_columns
+from laconcorde import __version__
+from laconcorde.config import Config, LaConcordeError
+from laconcorde.io_excel import list_sheets, load_source_target, save_xlsx
+from laconcorde.matching.linker import Linker
+from laconcorde.matching.schema import MatchResult
+from laconcorde.report import build_report_df, print_report_console
+from laconcorde.transfer import build_mapping_csv, transfer_columns
 
 
 def _validate_columns(config: Config, df_source: pd.DataFrame, df_target: pd.DataFrame) -> None:
@@ -96,7 +96,7 @@ def cmd_run(
     interactive: bool = False,
     mapping_path: str | None = None,
 ) -> int:
-    """Exécute le pipeline ConcordX."""
+    """Exécute le pipeline LaConcorde."""
     config = Config.load(config_path)
     df_source, df_target = load_source_target(config)
     _validate_columns(config, df_source, df_target)
@@ -133,6 +133,7 @@ def cmd_run(
         df_source,
         results,
         config.transfer_columns,
+        transfer_column_rename=config.transfer_column_rename or None,
         overwrite_mode=config.overwrite_mode,
         create_missing_cols=config.create_missing_cols,
         suffix_on_collision=config.suffix_on_collision,
@@ -149,7 +150,7 @@ def cmd_run(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="concordx",
+        prog="laconcorde",
         description="Outil de concordance entre tableurs Excel (fuzzy matching)",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -170,19 +171,23 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    if args.command == "list-sheets":
-        return cmd_list_sheets(args.file)
+    try:
+        if args.command == "list-sheets":
+            return cmd_list_sheets(args.file)
 
-    if args.command == "run":
-        if not args.dry_run and not args.output:
-            parser.error("--output requis sauf en --dry-run")
-        return cmd_run(
-            args.config,
-            args.output,
-            dry_run=args.dry_run,
-            interactive=args.interactive,
-            mapping_path=args.mapping,
-        )
+        if args.command == "run":
+            if not args.dry_run and not args.output:
+                parser.error("--output requis sauf en --dry-run")
+            return cmd_run(
+                args.config,
+                args.output,
+                dry_run=args.dry_run,
+                interactive=args.interactive,
+                mapping_path=args.mapping,
+            )
+    except LaConcordeError as e:
+        print(f"Erreur: {e}", file=sys.stderr)
+        return 1
 
     parser.print_help()
     return 0

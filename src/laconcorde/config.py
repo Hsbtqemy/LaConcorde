@@ -12,8 +12,16 @@ VALID_OVERWRITE_MODES = frozenset({"never", "if_empty", "always"})
 VALID_BLOCKERS = frozenset({"year_or_initial", "default"})
 
 
-class ConfigError(ValueError):
+class LaConcordeError(Exception):
+    """Exception de base pour LaConcorde."""
+
+
+class ConfigError(LaConcordeError, ValueError):
     """Erreur de validation de la configuration."""
+
+
+class ConfigFileError(LaConcordeError):
+    """Erreur de chargement du fichier de configuration (fichier absent, JSON invalide)."""
 
 
 @dataclass
@@ -51,7 +59,7 @@ class FieldRule:
 
 @dataclass
 class Config:
-    """Configuration principale de ConcordX."""
+    """Configuration principale de LaConcorde."""
 
     source_file: str = ""
     target_file: str = ""
@@ -64,6 +72,7 @@ class Config:
 
     rules: list[FieldRule] = field(default_factory=list)
     transfer_columns: list[str] = field(default_factory=list)
+    transfer_column_rename: dict[str, str] = field(default_factory=dict)  # source_col -> target_col_name
     overwrite_mode: str = "if_empty"  # never, if_empty, always
     create_missing_cols: bool = True
     suffix_on_collision: str = "_src"
@@ -117,6 +126,7 @@ class Config:
             target_sheet_in_single=d.get("target_sheet_in_single"),
             rules=rules,
             transfer_columns=d.get("transfer_columns", []),
+            transfer_column_rename=d.get("transfer_column_rename", {}),
             overwrite_mode=overwrite_mode,
             create_missing_cols=d.get("create_missing_cols", True),
             suffix_on_collision=d.get("suffix_on_collision", "_src"),
@@ -129,9 +139,28 @@ class Config:
 
     @classmethod
     def load(cls, path: str | Path) -> Config:
+        """
+        Charge la configuration depuis un fichier JSON.
+
+        Raises:
+            ConfigFileError: Si le fichier est absent ou le JSON invalide.
+            ConfigError: Si la configuration est invalide.
+        """
         path = Path(path).resolve()
-        with open(path, encoding="utf-8") as f:
-            d = json.load(f)
+        if not path.exists():
+            raise ConfigFileError(f"Fichier de configuration introuvable: {path}")
+
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ConfigFileError(f"JSON invalide dans {path}: {e}") from e
+        except OSError as e:
+            raise ConfigFileError(f"Impossible de lire {path}: {e}") from e
+
+        if not isinstance(d, dict):
+            raise ConfigFileError(f"Fichier de configuration invalide: {path} doit contenir un objet JSON")
+
         config = cls.from_dict(d)
         config.resolve_paths(path.parent)
         return config

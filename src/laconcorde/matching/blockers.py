@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from concordx.config import FieldRule
-from concordx.normalize import norm_text
+from laconcorde.config import FieldRule
+from laconcorde.normalize import norm_text
 
 
 def get_block_key_year_or_initial(
