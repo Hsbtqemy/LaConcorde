@@ -1,4 +1,4 @@
-"""I/O Excel : chargement et sauvegarde."""
+"""I/O tableurs : chargement et sauvegarde (Excel, ODS, CSV)."""
 
 from __future__ import annotations
 
@@ -9,16 +9,41 @@ import pandas as pd
 from laconcorde.config import Config, LaConcordeError
 
 
+# Formats supportés
+SUPPORTED_INPUT_EXTENSIONS = (".xlsx", ".xls", ".ods", ".csv")
+SUPPORTED_INPUT_FILTER = "Tableurs (*.xlsx *.xls *.ods *.csv);;Excel (*.xlsx *.xls);;ODS (*.ods);;CSV (*.csv);;Tous (*.*)"
+
+
 class ExcelFileError(LaConcordeError):
-    """Erreur de chargement d'un fichier Excel (fichier absent, feuille inexistante)."""
+    """Erreur de chargement d'un fichier (fichier absent, feuille inexistante)."""
+
+
+def _get_engine(path: Path) -> str | None:
+    """Retourne le moteur pandas selon l'extension, ou None pour auto."""
+    suffix = path.suffix.lower()
+    if suffix == ".xlsx":
+        return "openpyxl"
+    if suffix == ".xls":
+        return "xlrd"
+    if suffix in (".ods", ".odt"):
+        return "odf"
+    if suffix == ".xlsb":
+        return "pyxlsb"
+    return None
+
+
+def _is_csv(path: Path) -> bool:
+    return path.suffix.lower() == ".csv"
 
 
 def list_sheets(filepath: str | Path) -> list[str]:
     """
-    Liste les noms des feuilles d'un fichier xlsx.
+    Liste les noms des feuilles d'un fichier tableur.
+
+    Formats supportés : .xlsx, .xls, .ods, .csv (une seule "feuille" pour CSV).
 
     Args:
-        filepath: Chemin vers le fichier Excel.
+        filepath: Chemin vers le fichier.
 
     Returns:
         Liste des noms de feuilles.
@@ -28,12 +53,26 @@ def list_sheets(filepath: str | Path) -> list[str]:
     """
     path = Path(filepath)
     if not path.exists():
-        raise ExcelFileError(f"Fichier Excel introuvable: {path}")
+        raise ExcelFileError(f"Fichier introuvable: {path}")
+    if _is_csv(path):
+        return ["(données)"]
     try:
-        xl = pd.ExcelFile(path, engine="openpyxl")
-        return xl.sheet_names  # type: ignore[return-value]
+        engine = _get_engine(path)
+        xl = pd.ExcelFile(path, engine=engine) if engine else pd.ExcelFile(path)
+        return list(xl.sheet_names)  # type: ignore[return-value]
+    except ImportError as e:
+        ext = path.suffix.lower()
+        if ext == ".xls":
+            raise ExcelFileError(
+                f"Format .xls requis: pip install xlrd. Détail: {e}"
+            ) from e
+        if ext in (".ods", ".odt"):
+            raise ExcelFileError(
+                f"Format ODS requis: pip install odfpy. Détail: {e}"
+            ) from e
+        raise ExcelFileError(f"Impossible de lire {path}: {e}") from e
     except Exception as e:
-        raise ExcelFileError(f"Impossible de lire le fichier Excel {path}: {e}") from e
+        raise ExcelFileError(f"Impossible de lire le fichier {path}: {e}") from e
 
 
 def load_sheet(
@@ -43,14 +82,13 @@ def load_sheet(
     dtype: type | dict[str, type] | None = None,
 ) -> pd.DataFrame:
     """
-    Charge une feuille Excel dans un DataFrame en préservant le texte.
+    Charge une feuille dans un DataFrame en préservant le texte.
 
-    Évite les conversions agressives en utilisant dtype=str par défaut
-    pour les colonnes non numériques explicites.
+    Formats supportés : .xlsx, .xls, .ods, .csv.
 
     Args:
         filepath: Chemin vers le fichier.
-        sheet_name: Nom de la feuille (None = première).
+        sheet_name: Nom de la feuille (None = première). Ignoré pour CSV.
         dtype: Types de colonnes (None = str pour tout).
 
     Returns:
@@ -61,28 +99,48 @@ def load_sheet(
     """
     path = Path(filepath)
     if not path.exists():
-        raise ExcelFileError(f"Fichier Excel introuvable: {path}")
+        raise ExcelFileError(f"Fichier introuvable: {path}")
+
+    if _is_csv(path):
+        try:
+            return pd.read_csv(path, dtype=dtype or str, encoding="utf-8")
+        except UnicodeDecodeError:
+            try:
+                return pd.read_csv(path, dtype=dtype or str, encoding="latin-1")
+            except Exception as e:
+                raise ExcelFileError(f"Erreur CSV {path}: {e}") from e
+        except Exception as e:
+            raise ExcelFileError(f"Erreur CSV {path}: {e}") from e
 
     try:
-        xl = pd.ExcelFile(path, engine="openpyxl")
+        engine = _get_engine(path)
+        xl = pd.ExcelFile(path, engine=engine) if engine else pd.ExcelFile(path)
+    except ImportError as e:
+        ext = path.suffix.lower()
+        if ext == ".xls":
+            raise ExcelFileError(f"Format .xls requis: pip install xlrd") from e
+        if ext in (".ods", ".odt"):
+            raise ExcelFileError(f"Format ODS requis: pip install odfpy") from e
+        raise ExcelFileError(f"Impossible de lire {path}: {e}") from e
     except Exception as e:
-        raise ExcelFileError(f"Impossible de lire le fichier Excel {path}: {e}") from e
+        raise ExcelFileError(f"Impossible de lire le fichier {path}: {e}") from e
 
     if sheet_name is None:
         sheet_name = xl.sheet_names[0]  # type: ignore[assignment]
     elif sheet_name not in xl.sheet_names:
         sheets = [str(s) for s in xl.sheet_names]
         raise ExcelFileError(
-            f"Feuille '{sheet_name}' introuvable dans {path}. Feuilles disponibles: {', '.join(sheets)}"
+            f"Feuille '{sheet_name}' introuvable dans {path}. Feuilles: {', '.join(sheets)}"
         )
 
     if dtype is None:
-        dtype = str  # Préserver texte par défaut
+        dtype = str
     try:
-        df = pd.read_excel(xl, sheet_name=sheet_name, dtype=dtype, engine="openpyxl")
+        read_engine = engine if engine else "openpyxl"
+        df = pd.read_excel(xl, sheet_name=sheet_name, dtype=dtype, engine=read_engine)
         return df  # type: ignore[return-value]
     except Exception as e:
-        raise ExcelFileError(f"Erreur lors du chargement de la feuille '{sheet_name}' dans {path}: {e}") from e
+        raise ExcelFileError(f"Erreur feuille '{sheet_name}' dans {path}: {e}") from e
 
 
 def save_xlsx(

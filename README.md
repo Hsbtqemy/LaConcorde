@@ -8,7 +8,44 @@ Outil de concordance entre tableurs Excel (xlsx) avec fuzzy matching multi-colon
 pip install -e .
 # ou avec les dépendances de test :
 pip install -e ".[dev]"
+# avec l'interface graphique (PySide6) :
+pip install -e ".[gui]"
 ```
+
+## Interface graphique (GUI)
+
+Lancement :
+
+```bash
+laconcorde-gui
+# ou
+python -m laconcorde_gui
+```
+
+Sous Windows, double-cliquez sur `laconcorde-gui.bat` (ou exécutez-le en ligne de commande). Le script active automatiquement un venv `.venv` s'il existe.
+
+### Workflow
+
+1. **Projet** : Sélection des fichiers Excel source et cible (ou un seul fichier avec deux feuilles). Charger les aperçus pour visualiser les colonnes.
+2. **Règles** : Éditer les règles de matching (colonnes source/cible, poids, méthode), paramètres globaux (auto_accept_score, top_k, etc.) et colonnes à transférer. Lancer le matching.
+3. **Validation** : Valider les cas ambigus (pending) via trois panneaux : queue, détails cible, candidats. Raccourcis : A (accepter #1), 1-9 (accepter candidat n), R (rejeter), S (skipped), U (undo), Bulk accept >= X.
+4. **Export** : Choisir le chemin xlsx de sortie et optionnellement mapping.csv, puis exporter.
+
+### Exécutable Windows (.exe)
+
+Pour créer un exécutable autonome (sans installer Python) :
+
+```bash
+pip install -e ".[gui]" pyinstaller
+python build_exe.py
+```
+
+L'exécutable et les DLL seront dans `dist/laconcorde_gui/`. Copiez tout le dossier pour distribuer l'application. Aucune installation de Python ou de dépendances n'est requise sur la machine cible.
+
+### Limites
+
+- Le bouton **Annuler** pendant le matching est best-effort : le moteur `Linker.run()` est synchrone et non interruptible. Si l'annulation est demandée avant la fin, les résultats sont ignorés et un message s'affiche.
+- Les fichiers Excel originaux ne sont jamais modifiés ; l'export crée toujours un nouveau fichier.
 
 ## Usage CLI
 
@@ -86,6 +123,17 @@ Exemple de fichier de configuration :
 | `auto_accept_score` | Score au-dessus duquel on accepte automatiquement (si non ambigu) |
 | `ambiguity_delta` | Si top1 - top2 < delta → marqué ambigu |
 | `blocker` | Stratégie de réduction : `year_or_initial` |
+
+## Formats de fichiers
+
+| Entrée | Sortie |
+|--------|--------|
+| **.xlsx** (Excel 2007+) | **.xlsx** (Target + REPORT) |
+| **.xls** (Excel 97-2003)* | **.csv** (mapping) |
+| **.ods** (LibreOffice)* | |
+| **.csv** | |
+
+\* Optionnel : `pip install xlrd` pour .xls, `pip install odfpy` pour .ods
 
 ## Sorties
 

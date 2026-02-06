@@ -35,6 +35,21 @@ def test_save_xlsx(tmp_path: Path) -> None:
     xl.close()
 
 
+def test_list_sheets_csv(tmp_path: Path) -> None:
+    path = tmp_path / "data.csv"
+    path.write_text("a,b\n1,2\n", encoding="utf-8")
+    sheets = list_sheets(path)
+    assert sheets == ["(données)"]
+
+
+def test_load_sheet_csv(tmp_path: Path) -> None:
+    path = tmp_path / "data.csv"
+    path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+    df = load_sheet(path)
+    assert len(df) == 2
+    assert list(df.columns) == ["a", "b"]
+
+
 def test_load_source_target_two_files(tmp_path: Path) -> None:
     src = tmp_path / "source.xlsx"
     tgt = tmp_path / "target.xlsx"

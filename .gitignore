@@ -38,6 +38,9 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# PyInstaller
+*.spec
+
 # OS
 .DS_Store
 Thumbs.db

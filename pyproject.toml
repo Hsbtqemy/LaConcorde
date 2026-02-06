@@ -27,6 +27,10 @@ dependencies = [
     "rapidfuzz>=3.0.0",
 ]
 
+# Optionnel : formats additionnels (.xls, .ods)
+# pip install xlrd  pour .xls (Excel 97-2003)
+# pip install odfpy pour .ods (LibreOffice)
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
@@ -35,9 +39,20 @@ dev = [
     "pre-commit>=3.0.0",
     "pandas-stubs>=2.0.0",
 ]
+gui = [
+    "PySide6>=6.5.0",
+]
+build = [
+    "pyinstaller>=6.0.0",
+]
+formats = [
+    "xlrd>=2.0.0",
+    "odfpy>=1.0.0",
+]
 
 [project.scripts]
 laconcorde = "laconcorde.cli:main"
+laconcorde-gui = "laconcorde_gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
