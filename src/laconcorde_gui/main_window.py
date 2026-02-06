@@ -122,15 +122,23 @@ class MainWindow(QMainWindow):
         if self._progress:
             self._progress.close()
             self._progress = None
-        self._state.df_source = df_source
-        self._state.df_target = df_target
-        self._state.results = results
-        self._state.linker = linker
-        self._state.config = linker.config
-        self._state.choices = {}
-        self._state.undo_stack = []
-        self._go_to(self.SCREEN_VALIDATION)
-        self._validation_screen.refresh_data()
+        try:
+            self._state.df_source = df_source
+            self._state.df_target = df_target
+            self._state.results = results
+            self._state.linker = linker
+            self._state.config = linker.config
+            self._state.choices = {}
+            self._state.undo_stack = []
+            self._go_to(self.SCREEN_VALIDATION)
+            self._validation_screen.refresh_data()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'afficher les résultats ({len(results)} lignes).\n\n{e}\n\n"
+                "Essayez un filtre plus restrictif ou vérifiez la mémoire disponible.",
+            )
 
     def _on_matching_error(self, msg: str) -> None:
         if self._progress:

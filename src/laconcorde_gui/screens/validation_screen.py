@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Callable
 
 import pandas as pd
-from PySide6.QtCore import QModelIndex, Qt, QSortFilterProxyModel
+from PySide6.QtCore import QModelIndex, Qt, QSortFilterProxyModel, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -380,15 +380,19 @@ class ValidationScreen(QWidget):
         df_source = self._safe_get_df("df_source")
         preview_cols = self._get_preview_cols()
         self._queue_model.set_data(results, df_target, preview_cols)
-        self._queue_table.resizeColumnsToContents()
+        # Éviter resizeColumnsToContents sur gros volumes (très lent, peut faire planter)
+        if len(results) < 500:
+            self._queue_table.resizeColumnsToContents()
         self._queue_proxy.setFilterKeyColumn(-1)
         self._queue_proxy.set_score_threshold(self._triage_spin.value())
         self._on_filter_changed(self._filter_combo.currentText())
         self._update_rules_summary()
         self._update_triage_stats()
-        # Sélection automatique de la première ligne visible
-        if self._queue_proxy.rowCount() > 0:
-            self._queue_table.setCurrentIndex(self._queue_proxy.index(0, 0))
+        # Sélection différée pour laisser l'UI se mettre à jour (évite freeze/crash)
+        def _select_first() -> None:
+            if self._queue_proxy.rowCount() > 0:
+                self._queue_table.setCurrentIndex(self._queue_proxy.index(0, 0))
+        QTimer.singleShot(0, _select_first)
 
     def _get_rules(self) -> list:
         config = getattr(self._state, "config", None)
@@ -557,6 +561,11 @@ class ValidationScreen(QWidget):
     def _apply_sort(self, status: str | None) -> None:
         if not status:
             return
+        n = self._queue_model.rowCount()
+        if n > 2000:
+            # Désactiver le tri auto sur gros volumes (lent, peut bloquer)
+            self._queue_table.setSortingEnabled(False)
+            return
         if not self._queue_table.isSortingEnabled():
             self._queue_table.setSortingEnabled(True)
         best_col = self._queue_model.get_column_index("best_score")
@@ -595,6 +604,7 @@ class ValidationScreen(QWidget):
             self._show_details(result)
             df_src = self._safe_get_df("df_source")
             self._candidates_model.set_result(result, df_src, self._get_source_preview_cols())
+            # Peu de candidats (top_k), resize OK
             self._candidates_table.resizeColumnsToContents()
             self._candidates_table.resizeRowsToContents()
             self._current_result = result

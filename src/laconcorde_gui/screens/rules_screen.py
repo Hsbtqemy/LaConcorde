@@ -75,6 +75,11 @@ class RulesScreen(QWidget):
         self._overwrite_combo = QComboBox()
         self._overwrite_combo.addItems(sorted(VALID_OVERWRITE_MODES))
         self._overwrite_combo.setCurrentText("if_empty")
+        self._overwrite_combo.setToolTip(
+            "if_empty: ne remplit que les cellules vides (ne touche pas aux données existantes)\n"
+            "always: écrase toujours\n"
+            "never: crée une nouvelle colonne avec suffixe"
+        )
         params_layout.addRow("Overwrite mode:", self._overwrite_combo)
 
         self._create_missing_cb = QCheckBox()
@@ -115,6 +120,13 @@ class RulesScreen(QWidget):
         # Colonnes à transférer
         transfer_group = QGroupBox("Colonnes à transférer")
         transfer_layout = QVBoxLayout()
+        transfer_hint = QLabel(
+            "Cochez les colonnes source à transférer. "
+            "Choisissez la colonne cible (→) : existante = complète les vides, nouvelle = crée la colonne."
+        )
+        transfer_hint.setWordWrap(True)
+        transfer_hint.setStyleSheet("color: #555; font-size: 11px;")
+        transfer_layout.addWidget(transfer_hint)
         self._transfer_scroll = QScrollArea()
         self._transfer_scroll.setWidgetResizable(True)
         self._transfer_container = QWidget()
@@ -174,15 +186,30 @@ class RulesScreen(QWidget):
                     if sub and sub.widget():
                         sub.widget().deleteLater()
         df_src = getattr(self._state, "df_source", None)
+        df_tgt = getattr(self._state, "df_target", None)
         src_cols = list(df_src.columns) if df_src is not None else []
+        tgt_cols = list(df_tgt.columns) if df_tgt is not None else []
+        config_dict = getattr(self._state, "config_dict", {})
+        transfer_cols = set(config_dict.get("transfer_columns", []))
+        rename_dict = config_dict.get("transfer_column_rename", {})
         for col in src_cols:
             row = QHBoxLayout()
             cb = QCheckBox(col)
+            cb.setChecked(col in transfer_cols)
             row.addWidget(cb)
-            rename = QLineEdit()
-            rename.setPlaceholderText(f"Renommer (optionnel)")
-            rename.setMaximumWidth(200)
-            row.addWidget(rename)
+            target_combo = QComboBox()
+            target_combo.setEditable(True)
+            target_combo.addItem("")  # Vide = garder le nom source
+            target_combo.addItems(tgt_cols)
+            target_combo.setMinimumWidth(180)
+            target_combo.setToolTip(
+                "Sélectionnez une colonne cible existante ou saisissez un nouveau nom. "
+                "Avec 'Overwrite: if_empty', les cellules déjà remplies ne sont pas écrasées."
+            )
+            if col in rename_dict:
+                target_combo.setCurrentText(rename_dict[col])
+            row.addWidget(QLabel("→"))
+            row.addWidget(target_combo)
             self._transfer_layout.addLayout(row)
 
     def _add_rule(self) -> None:
@@ -250,12 +277,14 @@ class RulesScreen(QWidget):
             if inner is None or inner.count() < 2:
                 continue
             cb = inner.itemAt(0).widget()
-            rename = inner.itemAt(1).widget()
+            target_combo = inner.itemAt(2).widget() if inner.count() >= 3 else None
             if isinstance(cb, QCheckBox) and cb.isChecked():
                 col = cb.text()
                 transfer_cols.append(col)
-                if rename and isinstance(rename, QLineEdit) and rename.text().strip():
-                    rename_dict[col] = rename.text().strip()
+                if target_combo and isinstance(target_combo, QComboBox):
+                    tgt_name = target_combo.currentText().strip()
+                    if tgt_name:
+                        rename_dict[col] = tgt_name
         base["rules"] = rules
         base["transfer_columns"] = transfer_cols
         base["transfer_column_rename"] = rename_dict
