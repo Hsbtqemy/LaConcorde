@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtGui import QBrush, QColor
 
 from laconcorde.matching.schema import MatchResult
 
@@ -25,8 +26,40 @@ class ResultsQueueModel(QAbstractTableModel):
         self._selected_ids: set[int] = set()
         self._build_table()
 
+    def _derive_confidence(self, r: MatchResult) -> str:
+        """Dérive confidence: Certain, Douteux, Ambigu."""
+        if r.is_ambiguous:
+            return "Ambigu"
+        auto_accept = getattr(self, "_auto_accept_score", 95.0)
+        delta = getattr(self, "_ambiguity_delta", 5.0)
+        second = r.candidates[1].score if len(r.candidates) >= 2 else 0.0
+        gap = (r.best_score - second) if r.candidates else 0.0
+        if r.status in ("auto", "accepted") and r.best_score >= auto_accept and gap >= delta:
+            return "Certain"
+        return "Douteux"
+
+    def _derive_reason(self, r: MatchResult) -> str:
+        """Dérive reason (texte court)."""
+        if r.is_ambiguous:
+            return "Top1≈Top2"
+        if r.status == "auto":
+            return "Auto"
+        if r.status == "accepted":
+            return "Choisi"
+        if r.status == "rejected":
+            return "Rejeté"
+        if r.status == "skipped":
+            return "Skipped"
+        if r.status == "pending":
+            if not r.candidates:
+                return "Aucun"
+            if r.best_score < getattr(self, "_min_score", 0):
+                return "Sous seuil"
+            return "À valider"
+        return r.explanation[:30] if r.explanation else ""
+
     def _build_table(self) -> None:
-        """Construit la table flattened."""
+        """Construit la table flattened avec confidence et reason."""
         rows: list[dict[str, str | int | float | bool]] = []
         for r in self._results:
             chosen = r.chosen_source_row_id if r.chosen_source_row_id is not None else -1
@@ -38,6 +71,8 @@ class ResultsQueueModel(QAbstractTableModel):
                 "is_ambiguous": r.is_ambiguous,
                 "chosen_source_row_id": chosen,
                 "explanation": r.explanation,
+                "confidence": self._derive_confidence(r),
+                "reason": self._derive_reason(r),
             }
             for col in self._preview_cols:
                 if col in self._df_target.columns and r.target_row_id < len(self._df_target):
@@ -46,7 +81,8 @@ class ResultsQueueModel(QAbstractTableModel):
             rows.append(row)
         self._table = rows
         self._columns = (
-            ["selected", "target_row_id", "best_score", "status", "is_ambiguous", "chosen_source_row_id", "explanation"]
+            ["selected", "target_row_id", "confidence", "reason", "best_score", "status",
+             "is_ambiguous", "chosen_source_row_id", "explanation"]
             + [f"tgt_{c}" for c in self._preview_cols if c in (self._df_target.columns if len(self._df_target) > 0 else [])]
         )
 
@@ -55,10 +91,17 @@ class ResultsQueueModel(QAbstractTableModel):
         results: list[MatchResult],
         df_target: pd.DataFrame,
         preview_cols: list[str] | None = None,
+        *,
+        auto_accept_score: float = 95.0,
+        ambiguity_delta: float = 5.0,
+        min_score: float = 0.0,
     ) -> None:
         """Met à jour les données."""
         self.beginResetModel()
         self._results = results
+        self._auto_accept_score = auto_accept_score
+        self._ambiguity_delta = ambiguity_delta
+        self._min_score = min_score
         if self._selected_ids:
             current_ids = {r.target_row_id for r in results}
             self._selected_ids = {rid for rid in self._selected_ids if rid in current_ids}
@@ -84,6 +127,8 @@ class ResultsQueueModel(QAbstractTableModel):
                 self._table[i]["chosen_source_row_id"] = chosen_val
                 self._table[i]["status"] = r.status
                 self._table[i]["explanation"] = r.explanation
+                self._table[i]["confidence"] = self._derive_confidence(r)
+                self._table[i]["reason"] = self._derive_reason(r)
                 top_left = self.index(i, 0)
                 bottom_right = self.index(i, len(self._columns) - 1)
                 self.dataChanged.emit(top_left, bottom_right)
@@ -111,6 +156,16 @@ class ResultsQueueModel(QAbstractTableModel):
                 return Qt.CheckState.Checked if self._table[row].get("selected", False) else Qt.CheckState.Unchecked
             if role == Qt.ItemDataRole.DisplayRole:
                 return ""
+            return None
+        if role == Qt.ItemDataRole.BackgroundRole:
+            status = self._table[row].get("status", "")
+            conf = self._table[row].get("confidence", "")
+            if status == "auto":
+                return QBrush(QColor(245, 245, 245))
+            if conf == "Ambigu":
+                return QBrush(QColor(255, 243, 224))
+            if status == "pending":
+                return QBrush(QColor(255, 255, 230))
             return None
         if role == Qt.ItemDataRole.DisplayRole:
             val = self._table[row].get(col_name, "")

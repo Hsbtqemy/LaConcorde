@@ -106,7 +106,7 @@ class CandidatesModel(QAbstractTableModel):
         if isinstance(val, float):
             return f"{val:.1f}" if col == "score" else val
         if col == "rank":
-            return f"#{val}"
+            return "Top1" if val == 1 else f"#{val}"
         if col == "source_row":
             return f"Ligne {val}"
         return val

@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import pandas as pd
 from PySide6.QtCore import QModelIndex, Qt, QSortFilterProxyModel, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -31,6 +35,7 @@ from PySide6.QtWidgets import (
 from laconcorde.matching.schema import MatchCandidate, MatchResult
 
 from laconcorde_gui.models import CandidatesModel, ResultsQueueModel
+from laconcorde_gui.validation_widgets import FieldComparisonView, ScoreProgressDelegate
 
 if TYPE_CHECKING:
     from laconcorde_gui.state import AppState
@@ -123,58 +128,72 @@ class ValidationScreen(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        # Filtres
-        filter_row = QHBoxLayout()
-        filter_row.setContentsMargins(0, 0, 0, 0)
-        filter_row.setSpacing(8)
+        # (1) Header synthèse : badges + compteurs + recherche + filtre + toggle tech
+        header = QFrame()
+        header.setFrameShape(QFrame.Shape.StyledPanel)
+        header.setStyleSheet("QFrame { background: #f8f8f8; border-radius: 4px; padding: 4px; }")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(8, 4, 8, 4)
+        header_layout.setSpacing(12)
+        self._badge_auto = QLabel("Auto: 0")
+        self._badge_auto.setStyleSheet("color: #888; font-size: 11px;")
+        self._badge_pending = QLabel("À valider: 0")
+        self._badge_pending.setStyleSheet("color: #c67600; font-weight: 600; font-size: 11px;")
+        self._badge_ambiguous = QLabel("Ambigus: 0")
+        self._badge_ambiguous.setStyleSheet("color: #e65100; font-weight: 600; font-size: 11px;")
+        self._badge_rejected = QLabel("Rejetés: 0")
+        self._badge_rejected.setStyleSheet("color: #666; font-size: 11px;")
+        self._badge_skipped = QLabel("Skippés: 0")
+        self._badge_skipped.setStyleSheet("color: #666; font-size: 11px;")
+        header_layout.addWidget(self._badge_auto)
+        header_layout.addWidget(self._badge_pending)
+        header_layout.addWidget(self._badge_ambiguous)
+        header_layout.addWidget(self._badge_rejected)
+        header_layout.addWidget(self._badge_skipped)
+        header_layout.addSpacing(16)
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Recherche…")
+        self._search_edit.setMaximumWidth(180)
+        self._search_edit.textChanged.connect(self._on_search_changed)
+        header_layout.addWidget(self._search_edit)
         self._filter_combo = QComboBox()
-        self._filter_combo.addItem("Auto", "auto")
-        self._filter_combo.addItem("À valider (score ≥ seuil)", "review")
-        self._filter_combo.addItem("Probable non-match (score < seuil)", "low_score")
         self._filter_combo.addItem("Tous", "all")
+        self._filter_combo.addItem("Auto", "auto")
+        self._filter_combo.addItem("Pending", "pending")
+        self._filter_combo.addItem("À valider (≥seuil)", "review")
+        self._filter_combo.addItem("Probable non-match (<seuil)", "low_score")
         self._filter_combo.addItem("Acceptés", "accepted")
         self._filter_combo.addItem("Rejetés", "rejected")
         self._filter_combo.addItem("Skippés", "skipped")
-        self._filter_combo.addItem("En attente (brut)", "pending")
         self._filter_combo.setCurrentIndex(0)
         self._filter_combo.currentTextChanged.connect(self._on_filter_changed)
-        filter_row.addWidget(QLabel("Filtre:"))
-        filter_row.addWidget(self._filter_combo)
-        self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("Recherche...")
-        self._search_edit.textChanged.connect(self._on_search_changed)
-        filter_row.addWidget(self._search_edit)
+        header_layout.addWidget(self._filter_combo)
         self._triage_spin = QDoubleSpinBox()
         self._triage_spin.setRange(0, 100)
         self._triage_spin.setDecimals(1)
         self._triage_spin.setValue(80.0)
-        self._triage_spin.setToolTip("Seuil utilisé pour 'À valider' et 'Probable non-match'")
+        self._triage_spin.setToolTip("Seuil pour À valider / Probable non-match")
+        self._triage_spin.setMaximumWidth(60)
         self._triage_spin.valueChanged.connect(self._on_threshold_changed)
-        filter_row.addWidget(QLabel("Seuil:"))
-        filter_row.addWidget(self._triage_spin)
-        rules_details_btn = QPushButton("Détails")
-        rules_details_btn.setToolTip("Voir le détail : règles, colonnes transférées, aide")
-        rules_details_btn.clicked.connect(self._show_help_dialog)
-        filter_row.addWidget(rules_details_btn)
-        layout.addLayout(filter_row)
-        meta_row = QHBoxLayout()
-        meta_row.setContentsMargins(0, 0, 0, 0)
-        meta_row.setSpacing(8)
-        self._rules_summary_label = QLabel("")
-        self._rules_summary_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._rules_summary_label.setStyleSheet("color: #555; font-size: 11px; padding: 0;")
-        meta_row.addWidget(self._rules_summary_label)
-        self._triage_stats = QLabel("")
-        self._triage_stats.setStyleSheet("color: #555; font-size: 11px; padding: 0;")
-        meta_row.addWidget(self._triage_stats)
-        layout.addLayout(meta_row)
+        header_layout.addWidget(QLabel("Seuil:"))
+        header_layout.addWidget(self._triage_spin)
+        self._tech_toggle = QCheckBox("Détails techniques")
+        self._tech_toggle.setChecked(False)
+        self._tech_toggle.toggled.connect(self._on_tech_toggle)
+        header_layout.addWidget(self._tech_toggle)
+        help_btn = QPushButton("?")
+        help_btn.setFixedSize(24, 24)
+        help_btn.setToolTip("Aide : règles, transfert, raccourcis")
+        help_btn.clicked.connect(self._show_help_dialog)
+        header_layout.addWidget(help_btn)
+        header_layout.addStretch()
+        layout.addWidget(header)
 
-        # 3 panneaux (file d'attente + détails cible / correspondances / volet technique)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        # (3) Layout 30/70 : queue gauche, candidats+comparison droite
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Gauche: file d'attente + détails cible (splitter vertical)
-        left_splitter = QSplitter(Qt.Orientation.Vertical)
-        queue_group = QGroupBox("File d'attente (lignes cibles)")
+        # Gauche (30%): file d'attente
+        queue_group = QGroupBox("File d'attente")
         queue_layout = QVBoxLayout()
         self._queue_model = ResultsQueueModel()
         self._queue_proxy = QueueFilterProxy()
@@ -198,95 +217,47 @@ class ValidationScreen(QWidget):
         queue_btns.addStretch()
         queue_layout.addLayout(queue_btns)
         queue_group.setLayout(queue_layout)
-        left_splitter.addWidget(queue_group)
+        main_splitter.addWidget(queue_group)
 
-        details_group = QGroupBox("Détails de la ligne cible sélectionnée")
-        self._details_layout = QVBoxLayout()
-        self._details_placeholder = QLabel("Sélectionnez une ligne dans la file d'attente à gauche.")
-        self._details_layout.addWidget(self._details_placeholder)
-        details_group.setLayout(self._details_layout)
-        left_splitter.addWidget(details_group)
-        left_splitter.setSizes([520, 180])
-        splitter.addWidget(left_splitter)
-
-        # Centre: correspondances (zone principale)
-        candidates_group = QGroupBox("Correspondances proposées (fichier source)")
+        # Droite (70%): candidats + comparaison champ-par-champ
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        candidates_group = QGroupBox("Correspondances proposées")
         candidates_layout = QVBoxLayout()
-        explanation = QLabel(
-            "Pour la <b>ligne cible</b> sélectionnée (centre), ce tableau affiche les <b>lignes du fichier source</b> "
-            "que l'algorithme a identifiées comme potentiellement identiques. Chaque ligne = une proposition de match. "
-            "Choisissez celle qui correspond (double-clic ou touche 1–9), ou rejetez si aucune ne convient."
-        )
-        explanation.setWordWrap(True)
-        explanation.setTextFormat(Qt.TextFormat.RichText)
-        explanation.setStyleSheet("color: #333; font-size: 11px; padding: 4px 0;")
         self._candidates_model = CandidatesModel()
         self._candidates_table = QTableView()
         self._candidates_table.setModel(self._candidates_model)
-        self._candidates_table.setWordWrap(True)
         self._candidates_table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._candidates_table.doubleClicked.connect(self._on_candidate_double_clicked)
         self._candidates_table.selectionModel().selectionChanged.connect(self._on_candidate_selection_changed)
+        self._candidates_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._candidates_table.customContextMenuRequested.connect(self._on_candidates_context_menu)
         self._candidates_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self._candidates_table.horizontalHeader().setStretchLastSection(True)
-        self._candidates_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self._candidates_table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self._candidates_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        accept_btn = QPushButton("✓ Valider la correspondance sélectionnée")
-        accept_btn.setToolTip("Confirmer que la ligne source sélectionnée correspond à la ligne cible")
+        candidates_layout.addWidget(self._candidates_table)
+        self._top1_info_label = QLabel("")
+        self._top1_info_label.setStyleSheet("font-size: 11px; color: #555;")
+        candidates_layout.addWidget(self._top1_info_label)
+        accept_btn = QPushButton("✓ Valider (Enter)")
         accept_btn.clicked.connect(self._accept_selected_candidate)
-
-        # Comparaison par règles
-        self._rules_compare_group = QGroupBox("Comparaison (règles)")
-        rules_layout = QVBoxLayout()
-        self._rules_compare_hint = QLabel(
-            "Sélectionnez une proposition pour voir la comparaison par règle (cible ↔ source)."
-        )
-        self._rules_compare_hint.setWordWrap(True)
-        self._rules_compare_table = QTableWidget()
-        self._rules_compare_table.setColumnCount(4)
-        self._rules_compare_table.setHorizontalHeaderLabels(["Règle", "Cible", "Source", "Score"])
-        self._rules_compare_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self._rules_compare_table.verticalHeader().setVisible(False)
-        self._rules_compare_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._rules_compare_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        rules_layout.addWidget(self._rules_compare_hint)
-        rules_layout.addWidget(self._rules_compare_table)
-        self._rules_compare_group.setLayout(rules_layout)
-
-        # Détails source (ligne complète au clic)
-        self._source_details_group = QGroupBox("Détails de la ligne source sélectionnée")
-        source_layout = QVBoxLayout()
-        self._source_details_scroll = QScrollArea()
-        self._source_details_scroll.setWidgetResizable(True)
-        self._source_details_container = QWidget()
-        self._source_details_layout = QVBoxLayout(self._source_details_container)
-        self._source_details_layout.addWidget(
-            QLabel("Sélectionnez une proposition pour voir la ligne source complète.")
-        )
-        self._source_details_scroll.setWidget(self._source_details_container)
-        source_layout.addWidget(self._source_details_scroll)
-        self._source_details_group.setLayout(source_layout)
-        candidates_splitter = QSplitter(Qt.Orientation.Vertical)
-        candidates_top = QWidget()
-        candidates_top_layout = QVBoxLayout(candidates_top)
-        candidates_top_layout.setContentsMargins(0, 0, 0, 0)
-        candidates_top_layout.addWidget(explanation)
-        candidates_top_layout.addWidget(self._candidates_table)
-        candidates_top_layout.addWidget(accept_btn)
-        candidates_splitter.addWidget(candidates_top)
-        candidates_splitter.addWidget(self._rules_compare_group)
-        candidates_splitter.addWidget(self._source_details_group)
-        candidates_splitter.setSizes([420, 160, 160])
-        candidates_layout.addWidget(candidates_splitter)
-
+        candidates_layout.addWidget(accept_btn)
         candidates_group.setLayout(candidates_layout)
-        splitter.addWidget(candidates_group)
+        right_layout.addWidget(candidates_group)
 
-        # Volet technique (latéral)
-        tech_group = QGroupBox("Volet technique")
-        tech_layout = QVBoxLayout()
-        self._tech_status = QLabel("Sélectionnez une ligne pour voir les détails techniques.")
+        # (4) FieldComparisonView : comparaison champ-par-champ (cible vs source)
+        self._field_comparison = FieldComparisonView()
+        right_layout.addWidget(self._field_comparison)
+
+        main_splitter.addWidget(right_widget)
+        main_splitter.setSizes([300, 700])
+
+        # (2) Drawer détails techniques (repliable, fermé par défaut)
+        self._tech_drawer = QFrame()
+        self._tech_drawer.setFrameShape(QFrame.Shape.StyledPanel)
+        self._tech_drawer.setVisible(False)
+        tech_layout = QVBoxLayout(self._tech_drawer)
+        self._tech_status = QLabel("")
         self._tech_status.setWordWrap(True)
         self._tech_scores = QLabel("")
         self._tech_scores.setWordWrap(True)
@@ -304,11 +275,9 @@ class ValidationScreen(QWidget):
         tech_layout.addWidget(self._tech_candidate)
         tech_layout.addWidget(self._tech_thresholds)
         tech_layout.addWidget(self._tech_explanation)
-        tech_group.setLayout(tech_layout)
-        splitter.addWidget(tech_group)
+        layout.addWidget(self._tech_drawer)
 
-        splitter.setSizes([340, 760, 240])
-        layout.addWidget(splitter)
+        layout.addWidget(main_splitter)
 
         # Actions
         actions = QHBoxLayout()
@@ -357,13 +326,24 @@ class ValidationScreen(QWidget):
         ]
         for i in range(1, 10):
             shortcuts.append(QShortcut(QKeySequence(str(i)), self, lambda idx=i - 1: self._accept_candidate(idx)))
+        enter_shortcut = QShortcut(QKeySequence("Return"), self, self._on_enter_accept)
+        enter_shortcut.setAutoRepeat(False)
+        shortcuts.append(enter_shortcut)
         for s in shortcuts:
-            s.setAutoRepeat(False)  # Évite les plantages quand on reste appuyé sur une touche
+            s.setAutoRepeat(False)
         select_all_shortcut = QShortcut(QKeySequence("Ctrl+A"), self, self._select_all_visible)
         select_all_shortcut.setAutoRepeat(False)
 
     def _focus_accept1(self) -> None:
         self._accept_candidate(0)
+
+    def _on_enter_accept(self) -> None:
+        """Enter = accepter candidat sélectionné ou #1 si rien sélectionné."""
+        idx = self._candidates_table.currentIndex()
+        if idx.isValid():
+            self._accept_candidate(idx.row())
+        else:
+            self._accept_candidate(0)
 
     def _safe_get_df(self, attr: str) -> pd.DataFrame:
         """Récupère un DataFrame de l'état sans évaluer sa vérité (évite ValueError pandas)."""
@@ -379,15 +359,22 @@ class ValidationScreen(QWidget):
         df_target = self._safe_get_df("df_target")
         df_source = self._safe_get_df("df_source")
         preview_cols = self._get_preview_cols()
-        self._queue_model.set_data(results, df_target, preview_cols)
+        config = getattr(self._state, "config", None)
+        cfg = getattr(self._state, "config_dict", {})
+        auto_acc = config.auto_accept_score if config else cfg.get("auto_accept_score", 95.0)
+        amb_delta = config.ambiguity_delta if config else cfg.get("ambiguity_delta", 5.0)
+        min_sc = config.min_score if config else cfg.get("min_score", 0.0)
+        self._queue_model.set_data(
+            results, df_target, preview_cols,
+            auto_accept_score=auto_acc, ambiguity_delta=amb_delta, min_score=min_sc,
+        )
         # Éviter resizeColumnsToContents sur gros volumes (très lent, peut faire planter)
         if len(results) < 500:
             self._queue_table.resizeColumnsToContents()
         self._queue_proxy.setFilterKeyColumn(-1)
         self._queue_proxy.set_score_threshold(self._triage_spin.value())
         self._on_filter_changed(self._filter_combo.currentText())
-        self._update_rules_summary()
-        self._update_triage_stats()
+        self._update_badges()
         # Sélection différée pour laisser l'UI se mettre à jour (évite freeze/crash)
         def _select_first() -> None:
             if self._queue_proxy.rowCount() > 0:
@@ -437,17 +424,6 @@ class ValidationScreen(QWidget):
             parts.append(f"{src} ↔ {tgt}{suffix}")
         return "; ".join(parts) if parts else "Aucune règle définie."
 
-    def _update_rules_summary(self) -> None:
-        rules_text = self._format_rules_summary()
-        summary = "Comparé: " + rules_text
-        max_len = 140
-        if len(summary) > max_len:
-            display = summary[: max_len - 1] + "…"
-        else:
-            display = summary
-        self._rules_summary_label.setText(display)
-        self._rules_summary_label.setToolTip(summary)
-
     def _format_transfer_summary(self) -> str:
         config = getattr(self._state, "config", None)
         if config is not None:
@@ -483,30 +459,6 @@ class ValidationScreen(QWidget):
         msg.setText(help_html)
         msg.exec()
 
-    def _ordered_columns(self, df: pd.DataFrame, preferred: list[str]) -> list[str]:
-        seen: set[str] = set()
-        ordered: list[str] = []
-        for col in preferred:
-            if col in df.columns and col not in seen:
-                ordered.append(col)
-                seen.add(col)
-        for col in df.columns:
-            if col not in seen:
-                ordered.append(col)
-        return ordered
-
-    def _format_value(self, val: object, limit: int = 160) -> str:
-        if val is None or (isinstance(val, float) and (val != val or val == float("inf"))):
-            return ""
-        text = str(val)
-        return text if len(text) <= limit else text[:limit] + "..."
-
-    def _get_cell_value(self, df: pd.DataFrame, row_idx: int, col: str) -> str:
-        if col not in df.columns or row_idx < 0 or row_idx >= len(df):
-            return ""
-        val = df.iloc[row_idx][col]
-        return self._format_value(val)
-
     def _get_preview_cols(self) -> list[str]:
         """Colonnes à afficher en aperçu pour la file d'attente (df_target)."""
         df = self._safe_get_df("df_target")
@@ -531,9 +483,27 @@ class ValidationScreen(QWidget):
         self._queue_proxy.set_status_filter(status)
         self._apply_sort(status)
 
+    def _on_tech_toggle(self, checked: bool) -> None:
+        """Ouvre/ferme le drawer des détails techniques."""
+        self._tech_drawer.setVisible(checked)
+
     def _on_search_changed(self, text: str) -> None:
         """Applique la recherche texte."""
         self._queue_proxy.set_search_text(text)
+
+    def _on_candidates_context_menu(self, pos: Any) -> None:
+        """Menu contextuel : Copier la valeur sélectionnée."""
+        idx = self._candidates_table.indexAt(pos)
+        if not idx.isValid():
+            return
+        val = self._candidates_model.data(idx, Qt.ItemDataRole.DisplayRole)
+        text = str(val) if val is not None else ""
+        if not text:
+            return
+        menu = QMenu(self)
+        copy_act = menu.addAction("Copier")
+        if menu.exec(self._candidates_table.mapToGlobal(pos)) == copy_act:
+            QApplication.clipboard().setText(text)
 
     def _select_all_visible(self) -> None:
         """Coche toutes les lignes actuellement visibles (selon le filtre)."""
@@ -554,9 +524,10 @@ class ValidationScreen(QWidget):
     def _on_threshold_changed(self, _value: float | None = None) -> None:
         """Met à jour le seuil de triage."""
         self._queue_proxy.set_score_threshold(self._triage_spin.value())
-        self._update_triage_stats()
+        self._update_badges()
         status = self._filter_combo.currentData()
-        self._apply_sort(status)
+        if status:
+            self._apply_sort(status)
 
     def _apply_sort(self, status: str | None) -> None:
         if not status:
@@ -576,114 +547,116 @@ class ValidationScreen(QWidget):
         elif status == "low_score":
             self._queue_table.sortByColumn(best_col, Qt.SortOrder.AscendingOrder)
 
-    def _update_triage_stats(self) -> None:
+    def _update_badges(self) -> None:
+        """Met à jour les badges de synthèse (Auto, À valider, Ambigus, etc.)."""
         results = getattr(self._state, "results", [])
-        pending = [r for r in results if r.status == "pending"]
-        total = len(pending)
-        threshold = self._triage_spin.value()
-        review = sum(1 for r in pending if r.best_score >= threshold)
-        low = total - review
-        self._triage_stats.setText(
-            f"En attente: {total} | À valider (≥{threshold:.1f}): {review} | Probable non-match (<{threshold:.1f}): {low}"
-        )
+        n_auto = sum(1 for r in results if r.status == "auto")
+        n_pending = sum(1 for r in results if r.status == "pending")
+        n_ambiguous = sum(1 for r in results if r.is_ambiguous and r.status == "pending")
+        n_rejected = sum(1 for r in results if r.status == "rejected")
+        n_skipped = sum(1 for r in results if r.status == "skipped")
+        self._badge_auto.setText(f"Auto: {n_auto}")
+        self._badge_pending.setText(f"À valider: {n_pending}")
+        self._badge_ambiguous.setText(f"Ambigus: {n_ambiguous}")
+        self._badge_rejected.setText(f"Rejetés: {n_rejected}")
+        self._badge_skipped.setText(f"Skippés: {n_skipped}")
 
     def _on_queue_selection_changed(self) -> None:
         """Met à jour les détails et candidats quand la sélection change."""
         idx = self._queue_table.currentIndex()
         if not idx.isValid():
-            self._show_details(None)
             self._candidates_model.set_result(None, pd.DataFrame(), [])
             self._current_result = None
             self._current_candidate = None
-            self._reset_candidate_panels()
+            self._field_comparison.set_comparison(None, None, pd.DataFrame(), pd.DataFrame(), [])
+            self._top1_info_label.setText("")
             self._update_tech_panel(None, None)
             return
         src_row = self._queue_proxy.mapToSource(idx).row()
         result = self._queue_model.get_result_at_row(src_row)
         if result:
-            self._show_details(result)
             df_src = self._safe_get_df("df_source")
             self._candidates_model.set_result(result, df_src, self._get_source_preview_cols())
-            # Peu de candidats (top_k), resize OK
+            score_col = self._candidates_model._columns.index("score") if "score" in self._candidates_model._columns else -1
+            if score_col >= 0:
+                self._candidates_table.setItemDelegateForColumn(score_col, ScoreProgressDelegate(self))
             self._candidates_table.resizeColumnsToContents()
-            self._candidates_table.resizeRowsToContents()
             self._current_result = result
-            # Sélection automatique du meilleur candidat (première ligne = plus fort score)
             if self._candidates_model.rowCount() > 0:
                 self._candidates_table.setCurrentIndex(self._candidates_model.index(0, 0))
                 best_candidate = self._candidates_model.get_candidate_at_row(0)
                 self._current_candidate = best_candidate
-                self._update_rules_comparison(result, best_candidate, 1)
-                self._show_source_details(best_candidate.source_row_id)
+                self._update_field_comparison(result, best_candidate)
+                self._update_top1_info(result, best_candidate)
                 self._update_tech_panel(result, best_candidate)
             else:
                 self._current_candidate = None
-                self._reset_candidate_panels()
+                self._field_comparison.set_comparison(None, None, pd.DataFrame(), pd.DataFrame(), [])
+                self._top1_info_label.setText("")
                 self._update_tech_panel(result, None)
         else:
-            self._show_details(None)
             self._candidates_model.set_result(None, pd.DataFrame(), [])
             self._current_result = None
             self._current_candidate = None
-            self._reset_candidate_panels()
+            self._field_comparison.set_comparison(None, None, pd.DataFrame(), pd.DataFrame(), [])
+            self._top1_info_label.setText("")
             self._update_tech_panel(None, None)
-
-    def _show_details(self, result: MatchResult | None) -> None:
-        """Affiche les détails de la ligne cible."""
-        for i in reversed(range(self._details_layout.count())):
-            w = self._details_layout.itemAt(i).widget()
-            if w:
-                w.deleteLater()
-        if result is None:
-            self._details_layout.addWidget(QLabel("Sélectionnez une ligne dans la file d'attente à gauche."))
-            return
-        df = self._safe_get_df("df_target")
-        if result.target_row_id >= len(df):
-            self._details_layout.addWidget(QLabel("Données indisponibles."))
-            return
-        row = df.iloc[result.target_row_id]
-        grid = QGridLayout()
-        _, rule_target_cols = self._get_rule_columns()
-        cols = self._ordered_columns(df, rule_target_cols)
-        for i, col in enumerate(cols):
-            val = row[col]
-            label = QLabel(str(col) + ":")
-            if col in rule_target_cols:
-                label.setStyleSheet("font-weight: 600;")
-            value = QLabel("" if pd.isna(val) else self._format_value(val))
-            value.setWordWrap(True)
-            grid.addWidget(label, i, 0)
-            grid.addWidget(value, i, 1)
-        container = QWidget()
-        container.setLayout(grid)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(container)
-        self._details_layout.addWidget(scroll)
 
     def _on_queue_double_clicked(self, index: QModelIndex) -> None:
         """Double-clic sur la file d'attente : accepter le premier candidat."""
         self._accept_candidate(0)
 
     def _on_candidate_double_clicked(self, index: QModelIndex) -> None:
-        """Double-clic sur un candidat : l'accepter."""
+        """Double-clic sur un candidat : accepter + next."""
         self._accept_candidate(index.row())
 
+    def _advance_to_next(self) -> None:
+        """Sélectionne la prochaine ligne selon le filtre (auto-advance)."""
+        idx = self._queue_table.currentIndex()
+        if not idx.isValid():
+            return
+        proxy_row = idx.row()
+        next_row = proxy_row + 1
+        if next_row < self._queue_proxy.rowCount():
+            self._queue_table.setCurrentIndex(self._queue_proxy.index(next_row, 0))
+        else:
+            QMessageBox.information(self, "Fin", "Plus de lignes dans la vue actuelle.")
+
     def _on_candidate_selection_changed(self) -> None:
-        """Met à jour la comparaison et les détails source au clic sur un candidat."""
+        """Met à jour la comparaison champ-par-champ au clic sur un candidat."""
         idx = self._candidates_table.currentIndex()
         if not idx.isValid() or self._current_result is None:
-            self._reset_candidate_panels()
             return
         candidate = self._candidates_model.get_candidate_at_row(idx.row())
         if candidate is None:
-            self._reset_candidate_panels()
             self._update_tech_panel(self._current_result, None)
             return
         self._current_candidate = candidate
-        self._update_rules_comparison(self._current_result, candidate, idx.row() + 1)
-        self._show_source_details(candidate.source_row_id)
+        self._update_field_comparison(self._current_result, candidate)
+        self._update_top1_info(self._current_result, candidate)
         self._update_tech_panel(self._current_result, candidate)
+
+    def _update_field_comparison(self, result: MatchResult, candidate: MatchCandidate) -> None:
+        """Met à jour la vue comparaison champ-par-champ."""
+        df_tgt = self._safe_get_df("df_target")
+        df_src = self._safe_get_df("df_source")
+        rules = self._get_rules()
+        self._field_comparison.set_comparison(result, candidate, df_tgt, df_src, rules)
+
+    def _update_top1_info(self, result: MatchResult, candidate: MatchCandidate | None) -> None:
+        """Affiche Top1, Top2, Δ dans la barre d'info."""
+        if not result or not result.candidates:
+            self._top1_info_label.setText("")
+            return
+        top1 = result.candidates[0].score
+        top2 = result.candidates[1].score if len(result.candidates) > 1 else None
+        delta = (top1 - top2) if top2 is not None else None
+        parts = [f"Top1: {top1:.0f}"]
+        if top2 is not None:
+            parts.append(f"Top2: {top2:.0f}")
+        if delta is not None:
+            parts.append(f"Δ: {delta:.0f}")
+        self._top1_info_label.setText(" · ".join(parts))
 
     def _accept_selected_candidate(self) -> None:
         """Accepter le candidat sélectionné dans la table."""
@@ -737,8 +710,8 @@ class ValidationScreen(QWidget):
                 r.chosen_source_row_id = chosen_source_row_id
                 r.status = "rejected" if chosen_source_row_id is None else "accepted"
                 r.explanation = "No match (user)" if chosen_source_row_id is None else "User accepted"
-                self._on_queue_selection_changed()
-                self._update_triage_stats()
+                self._update_badges()
+                self._advance_to_next()
                 break
 
     def _apply_decision_skipped(self, target_row_id: int) -> None:
@@ -755,8 +728,8 @@ class ValidationScreen(QWidget):
                 r.status = "skipped"
                 r.explanation = "Skipped (user)"
                 self._queue_model.update_result(target_row_id, None, status="skipped")
-                self._on_queue_selection_changed()
-                self._update_triage_stats()
+                self._update_badges()
+                self._advance_to_next()
                 break
 
     def _undo_last(self) -> None:
@@ -776,30 +749,57 @@ class ValidationScreen(QWidget):
                 r.explanation = "Reverted" if old_chosen is None else "User accepted"
                 self._queue_model.update_result(target_row_id, old_chosen)
                 self._on_queue_selection_changed()
-                self._update_triage_stats()
+                self._update_badges()
                 break
 
     def _bulk_accept(self) -> None:
-        """Accepte en masse les pending non ambigus au-dessus du seuil."""
+        """Accepte en masse les pending non ambigus au-dessus du seuil (avec confirmation)."""
         threshold = self._bulk_spin.value()
         results = getattr(self._state, "results", [])
-        choices = getattr(self._state, "choices", {})
-        count = 0
+        status_filter = self._filter_combo.currentData() or "all"
+        to_accept: list[tuple[int, int]] = []
         for r in results:
             if r.status != "pending" or r.is_ambiguous:
                 continue
             if not r.candidates or r.candidates[0].score < threshold:
                 continue
-            chosen = r.candidates[0].source_row_id
-            choices[r.target_row_id] = chosen
-            r.chosen_source_row_id = chosen
-            r.status = "accepted"
-            r.explanation = "Bulk accept"
-            self._queue_model.update_result(r.target_row_id, chosen)
-            count += 1
-        if count > 0:
-            QMessageBox.information(self, "Bulk accept", f"{count} lignes acceptées.")
-        self._update_triage_stats()
+            if status_filter != "all" and status_filter not in ("pending", "review"):
+                continue
+            if status_filter == "review" and (r.best_score < self._triage_spin.value()):
+                continue
+            if status_filter == "low_score" and (r.best_score >= self._triage_spin.value()):
+                continue
+            to_accept.append((r.target_row_id, r.candidates[0].source_row_id))
+        if not to_accept:
+            QMessageBox.information(self, "Bulk accept", "Aucune ligne à traiter.")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Bulk accept",
+            f"Appliquer à {len(to_accept)} lignes (pending, score ≥ {threshold:.0f}) ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        choices = getattr(self._state, "choices", {})
+        from laconcorde_gui.controllers import SessionController
+        for target_row_id, chosen in to_accept:
+            for r in results:
+                if r.target_row_id == target_row_id:
+                    old = r.chosen_source_row_id
+                    SessionController.push_undo(self._state, target_row_id, old)
+                    break
+            choices[target_row_id] = chosen
+            for r in results:
+                if r.target_row_id == target_row_id:
+                    r.chosen_source_row_id = chosen
+                    r.status = "accepted"
+                    r.explanation = "Bulk accept"
+                    break
+            self._queue_model.update_result(target_row_id, chosen)
+        QMessageBox.information(self, "Bulk accept", f"{len(to_accept)} lignes acceptées.")
+        self._update_badges()
 
     def _auto_accept_100(self) -> None:
         """Auto-valide les pending dont le meilleur score est 100%."""
@@ -839,19 +839,11 @@ class ValidationScreen(QWidget):
             self._queue_model.update_result(target_row_id, chosen)
         if to_apply:
             QMessageBox.information(self, "Auto-accept 100%", f"{len(to_apply)} lignes acceptées.")
-        self._update_triage_stats()
+        self._update_badges()
 
     def _on_finalize_clicked(self) -> None:
         """Finalise la validation et appelle resolve_pending."""
         self._on_finalize()
-
-    def _reset_candidate_panels(self) -> None:
-        """Réinitialise la comparaison et les détails source."""
-        self._rules_compare_table.setRowCount(0)
-        self._rules_compare_hint.setText(
-            "Sélectionnez une proposition pour voir la comparaison par règle (cible ↔ source)."
-        )
-        self._reset_source_details("Sélectionnez une proposition pour voir la ligne source complète.")
 
     def _update_tech_panel(self, result: MatchResult | None, candidate: MatchCandidate | None) -> None:
         if result is None:
@@ -894,72 +886,3 @@ class ValidationScreen(QWidget):
             self._tech_thresholds.setText(f"<b>Seuil triage:</b> {self._triage_spin.value():.1f}")
         self._tech_explanation.setText(f"<b>Explication:</b> {result.explanation}")
 
-    def _reset_source_details(self, text: str) -> None:
-        for i in reversed(range(self._source_details_layout.count())):
-            w = self._source_details_layout.itemAt(i).widget()
-            if w:
-                w.deleteLater()
-        placeholder = QLabel(text)
-        placeholder.setWordWrap(True)
-        self._source_details_layout.addWidget(placeholder)
-
-    def _update_rules_comparison(
-        self, result: MatchResult, candidate, rank: int
-    ) -> None:
-        rules = self._get_rules()
-        if not rules:
-            self._rules_compare_table.setRowCount(0)
-            self._rules_compare_hint.setText("Aucune règle définie.")
-            return
-        self._rules_compare_hint.setText(f"Comparaison pour la proposition #{rank}.")
-        df_target = self._safe_get_df("df_target")
-        df_source = self._safe_get_df("df_source")
-        self._rules_compare_table.setRowCount(len(rules))
-        for i, rule in enumerate(rules):
-            if hasattr(rule, "source_col"):
-                src = rule.source_col
-                tgt = rule.target_col
-            else:
-                src = rule.get("source_col", "")
-                tgt = rule.get("target_col", "")
-            rule_label = f"{src} → {tgt}" if src or tgt else "—"
-            tgt_val = self._get_cell_value(df_target, result.target_row_id, tgt)
-            src_val = self._get_cell_value(df_source, candidate.source_row_id, src)
-            score = candidate.details.get(f"{src}:{tgt}") if src and tgt else None
-            score_text = f"{score:.1f}" if isinstance(score, (int, float)) else ""
-            items = [
-                QTableWidgetItem(rule_label),
-                QTableWidgetItem(tgt_val),
-                QTableWidgetItem(src_val),
-                QTableWidgetItem(score_text),
-            ]
-            for col_idx, item in enumerate(items):
-                if col_idx == 3:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self._rules_compare_table.setItem(i, col_idx, item)
-
-    def _show_source_details(self, source_row_id: int) -> None:
-        df = self._safe_get_df("df_source")
-        if source_row_id < 0 or source_row_id >= len(df):
-            self._reset_source_details("Données source indisponibles.")
-            return
-        row = df.iloc[source_row_id]
-        rule_source_cols, _ = self._get_rule_columns()
-        cols = self._ordered_columns(df, rule_source_cols)
-        grid = QGridLayout()
-        for i, col in enumerate(cols):
-            val = row[col]
-            label = QLabel(str(col) + ":")
-            if col in rule_source_cols:
-                label.setStyleSheet("font-weight: 600;")
-            value = QLabel("" if pd.isna(val) else self._format_value(val))
-            value.setWordWrap(True)
-            grid.addWidget(label, i, 0)
-            grid.addWidget(value, i, 1)
-        for i in reversed(range(self._source_details_layout.count())):
-            w = self._source_details_layout.itemAt(i).widget()
-            if w:
-                w.deleteLater()
-        container = QWidget()
-        container.setLayout(grid)
-        self._source_details_layout.addWidget(container)

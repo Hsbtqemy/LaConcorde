@@ -28,7 +28,7 @@ Sous Windows, double-cliquez sur `laconcorde-gui.bat` (ou exécutez-le en ligne 
 
 1. **Projet** : Sélection des fichiers Excel source et cible (ou un seul fichier avec deux feuilles). Charger les aperçus pour visualiser les colonnes.
 2. **Règles** : Éditer les règles de matching (colonnes source/cible, poids, méthode), paramètres globaux (auto_accept_score, top_k, etc.) et colonnes à transférer. Lancer le matching.
-3. **Validation** : Valider les cas ambigus (pending) via trois panneaux : queue, détails cible, candidats. Raccourcis : A (accepter #1), 1-9 (accepter candidat n), R (rejeter), S (skipped), U (undo), Bulk accept >= X.
+3. **Validation** : Interface refondue pour une vérification rapide : header de synthèse (compteurs Auto/À valider/Ambigus/Rejetés/Skipped), filtre et recherche, queue à gauche (30 %) avec colonnes confidence/reason, candidats + comparaison champ-par-champ à droite (70 %). Volet technique repliable. Raccourcis : Enter (accepter sélection), double-clic candidat (accepter + suivant), A/1-9/R/S/U, auto-advance après décision. Bulk accept avec confirmation et comptage.
 4. **Export** : Choisir le chemin xlsx de sortie et optionnellement mapping.csv, puis exporter.
 
 ### Exécutable Windows (.exe)
