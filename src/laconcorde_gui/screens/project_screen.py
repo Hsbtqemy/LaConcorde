@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -59,6 +60,11 @@ class ProjectScreen(QWidget):
         self._source_sheet_combo = QComboBox()
         self._source_sheet_combo.setMinimumWidth(150)
         file_layout.addRow("Feuille source:", self._source_sheet_combo)
+        self._source_header_spin = QSpinBox()
+        self._source_header_spin.setRange(1, 10000)
+        self._source_header_spin.setValue(getattr(self._state, "source_header_row", 1))
+        self._source_header_spin.setToolTip("Numéro de ligne (1 = première) contenant les en-têtes.")
+        file_layout.addRow("Ligne d'en-tête source:", self._source_header_spin)
 
         self._target_file_edit = QLineEdit()
         self._target_file_edit.setPlaceholderText("Chemin fichier cible...")
@@ -71,6 +77,11 @@ class ProjectScreen(QWidget):
 
         self._target_sheet_combo = QComboBox()
         file_layout.addRow("Feuille cible:", self._target_sheet_combo)
+        self._target_header_spin = QSpinBox()
+        self._target_header_spin.setRange(1, 10000)
+        self._target_header_spin.setValue(getattr(self._state, "target_header_row", 1))
+        self._target_header_spin.setToolTip("Numéro de ligne (1 = première) contenant les en-têtes.")
+        file_layout.addRow("Ligne d'en-tête cible:", self._target_header_spin)
 
         self._single_file_edit = QLineEdit()
         self._single_file_edit.setPlaceholderText("Chemin fichier unique...")
@@ -163,13 +174,17 @@ class ProjectScreen(QWidget):
                     return
                 src_sheet = self._single_src_sheet_combo.currentText() or None
                 tgt_sheet = self._single_tgt_sheet_combo.currentText() or None
-                df_src = load_sheet(path, src_sheet).head(self.PREVIEW_ROWS)
-                df_tgt = load_sheet(path, tgt_sheet).head(self.PREVIEW_ROWS)
+                src_header = self._source_header_spin.value()
+                tgt_header = self._target_header_spin.value()
+                df_src = load_sheet(path, src_sheet, header_row=src_header).head(self.PREVIEW_ROWS)
+                df_tgt = load_sheet(path, tgt_sheet, header_row=tgt_header).head(self.PREVIEW_ROWS)
                 self._state.single_file = path
                 self._state.source_sheet_in_single = src_sheet
                 self._state.target_sheet_in_single = tgt_sheet
                 self._state.source_file = ""
                 self._state.target_file = ""
+                self._state.source_header_row = src_header
+                self._state.target_header_row = tgt_header
             else:
                 src_path = self._source_file_edit.text().strip()
                 tgt_path = self._target_file_edit.text().strip()
@@ -178,13 +193,17 @@ class ProjectScreen(QWidget):
                     return
                 src_sheet = self._source_sheet_combo.currentText() or None
                 tgt_sheet = self._target_sheet_combo.currentText() or None
-                df_src = load_sheet(src_path, src_sheet).head(self.PREVIEW_ROWS)
-                df_tgt = load_sheet(tgt_path, tgt_sheet).head(self.PREVIEW_ROWS)
+                src_header = self._source_header_spin.value()
+                tgt_header = self._target_header_spin.value()
+                df_src = load_sheet(src_path, src_sheet, header_row=src_header).head(self.PREVIEW_ROWS)
+                df_tgt = load_sheet(tgt_path, tgt_sheet, header_row=tgt_header).head(self.PREVIEW_ROWS)
                 self._state.source_file = src_path
                 self._state.target_file = tgt_path
                 self._state.source_sheet = src_sheet
                 self._state.target_sheet = tgt_sheet
                 self._state.single_file = ""
+                self._state.source_header_row = src_header
+                self._state.target_header_row = tgt_header
 
             self._state.df_source = df_src
             self._state.df_target = df_tgt

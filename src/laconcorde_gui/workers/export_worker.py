@@ -56,6 +56,7 @@ class ExportWorker(QThread):
                 overwrite_mode=self._config.overwrite_mode,
                 create_missing_cols=self._config.create_missing_cols,
                 suffix_on_collision=self._config.suffix_on_collision,
+                concat_transfers=self._config.concat_transfers,
             )
             if self.cancel_requested:
                 self.error.emit("Annulation demandée")

@@ -61,6 +61,12 @@ def test_score_field_doi_variants_match() -> None:
     assert score_field("doi:  10.1234 / abc", "10.1234/abc", rule) == 100.0
 
 
+def test_score_field_strip_file_extensions() -> None:
+    rule = FieldRule("a", "b", 1.0, "normalized_exact", True, False, True)
+    assert score_field("rapport.pdf", "rapport", rule) == 100.0
+    assert score_field("photo.JPG", "photo.jpg", rule) == 100.0
+
+
 def test_score_row_pair_weighted() -> None:
     rules = [
         FieldRule("a", "a", 1.0, "exact", True),

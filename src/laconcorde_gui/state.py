@@ -23,6 +23,8 @@ class AppState:
     target_sheet: str | None = None
     source_sheet_in_single: str | None = None
     target_sheet_in_single: str | None = None
+    source_header_row: int = 1
+    target_header_row: int = 1
 
     # DataFrames (preview ou complets)
     df_source: pd.DataFrame | None = None
@@ -54,5 +56,7 @@ class AppState:
             d["target_file"] = self.target_file
             d["source_sheet"] = self.source_sheet
             d["target_sheet"] = self.target_sheet
+        d["source_header_row"] = self.source_header_row
+        d["target_header_row"] = self.target_header_row
         d.update(self.config_dict)
         return d

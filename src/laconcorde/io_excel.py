@@ -80,6 +80,7 @@ def load_sheet(
     sheet_name: str | None = None,
     *,
     dtype: type | dict[str, type] | None = None,
+    header_row: int = 1,
 ) -> pd.DataFrame:
     """
     Charge une feuille dans un DataFrame en préservant le texte.
@@ -90,6 +91,7 @@ def load_sheet(
         filepath: Chemin vers le fichier.
         sheet_name: Nom de la feuille (None = première). Ignoré pour CSV.
         dtype: Types de colonnes (None = str pour tout).
+        header_row: Numéro de ligne (1-based) contenant les en-têtes.
 
     Returns:
         DataFrame chargé.
@@ -101,12 +103,13 @@ def load_sheet(
     if not path.exists():
         raise ExcelFileError(f"Fichier introuvable: {path}")
 
+    header_idx = max(header_row - 1, 0)
     if _is_csv(path):
         try:
-            return pd.read_csv(path, dtype=dtype or str, encoding="utf-8")
+            return pd.read_csv(path, dtype=dtype or str, encoding="utf-8", header=header_idx)
         except UnicodeDecodeError:
             try:
-                return pd.read_csv(path, dtype=dtype or str, encoding="latin-1")
+                return pd.read_csv(path, dtype=dtype or str, encoding="latin-1", header=header_idx)
             except Exception as e:
                 raise ExcelFileError(f"Erreur CSV {path}: {e}") from e
         except Exception as e:
@@ -137,7 +140,13 @@ def load_sheet(
         dtype = str
     try:
         read_engine = engine if engine else "openpyxl"
-        df = pd.read_excel(xl, sheet_name=sheet_name, dtype=dtype, engine=read_engine)
+        df = pd.read_excel(
+            xl,
+            sheet_name=sheet_name,
+            dtype=dtype,
+            engine=read_engine,
+            header=header_idx,
+        )
         return df  # type: ignore[return-value]
     except Exception as e:
         raise ExcelFileError(f"Erreur feuille '{sheet_name}' dans {path}: {e}") from e
@@ -173,9 +182,25 @@ def load_source_target(config: Config) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     if config.single_file:
         path = Path(config.single_file)
-        df_source = load_sheet(path, config.source_sheet_in_single)
-        df_target = load_sheet(path, config.target_sheet_in_single)
+        df_source = load_sheet(
+            path,
+            config.source_sheet_in_single,
+            header_row=config.source_header_row,
+        )
+        df_target = load_sheet(
+            path,
+            config.target_sheet_in_single,
+            header_row=config.target_header_row,
+        )
     else:
-        df_source = load_sheet(config.source_file, config.source_sheet)
-        df_target = load_sheet(config.target_file, config.target_sheet)
+        df_source = load_sheet(
+            config.source_file,
+            config.source_sheet,
+            header_row=config.source_header_row,
+        )
+        df_target = load_sheet(
+            config.target_file,
+            config.target_sheet,
+            header_row=config.target_header_row,
+        )
     return df_source, df_target

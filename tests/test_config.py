@@ -82,3 +82,26 @@ def test_config_validation_score_out_of_range() -> None:
                 "rules": [],
             }
         )
+
+
+def test_config_header_row_validation() -> None:
+    cfg = Config.from_dict(
+        {
+            "source_file": "a.xlsx",
+            "target_file": "b.xlsx",
+            "source_header_row": 8,
+            "target_header_row": 3,
+            "rules": [],
+        }
+    )
+    assert cfg.source_header_row == 8
+    assert cfg.target_header_row == 3
+    with pytest.raises(ConfigError, match="source_header_row"):
+        Config.from_dict(
+            {
+                "source_file": "a.xlsx",
+                "target_file": "b.xlsx",
+                "source_header_row": 0,
+                "rules": [],
+            }
+        )

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -15,6 +16,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -25,10 +28,226 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from laconcorde.config import VALID_BLOCKERS, VALID_METHODS, VALID_OVERWRITE_MODES
+from laconcorde.config import (
+    VALID_BLOCKERS,
+    VALID_METHODS,
+    VALID_OVERWRITE_MODES,
+)
 
 if TYPE_CHECKING:
     from laconcorde_gui.state import AppState
+
+
+class _ConcatSourceWidget(QWidget):
+    """Widget d'une source concaténée (colonne + préfixe)."""
+
+    def __init__(self, source_cols: list[str], col: str = "", prefix: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self._col_combo = QComboBox()
+        self._prefix_edit = QLineEdit()
+        self._prefix_edit.setPlaceholderText("Préfixe (optionnel)")
+        layout.addWidget(self._col_combo, 2)
+        layout.addWidget(self._prefix_edit, 3)
+        self.refresh_source_cols(source_cols, current=col)
+        if prefix:
+            self._prefix_edit.setText(prefix)
+
+    def refresh_source_cols(self, source_cols: list[str], current: str | None = None) -> None:
+        cur = current if current is not None else self._col_combo.currentText()
+        items = list(source_cols)
+        if cur and cur not in items:
+            items.insert(0, cur)
+        self._col_combo.clear()
+        self._col_combo.addItems(items)
+        if cur:
+            self._col_combo.setCurrentText(cur)
+
+    def get_data(self) -> tuple[str, str]:
+        return self._col_combo.currentText().strip(), self._prefix_edit.text()
+
+
+class _ConcatTransferEditor(QGroupBox):
+    """Éditeur d'une concaténation vers une colonne cible."""
+
+    def __init__(
+        self,
+        source_cols: list[str],
+        target_cols: list[str],
+        on_remove: Callable[[], None] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__("Concaténation")
+        self._source_cols = list(source_cols)
+        self._target_cols = list(target_cols)
+        layout = QVBoxLayout(self)
+
+        header_row = QHBoxLayout()
+        self._target_combo = QComboBox()
+        self._target_combo.setEditable(True)
+        self._target_combo.setMinimumWidth(180)
+        self._target_combo.setToolTip(
+            "Sélectionnez une colonne cible existante ou saisissez un nouveau nom."
+        )
+        if self._target_combo.lineEdit():
+            self._target_combo.lineEdit().setPlaceholderText("Colonne cible (nom)")
+        self.refresh_target_cols(self._target_cols)
+        self._separator_edit = QLineEdit("; ")
+        self._separator_edit.setPlaceholderText("Séparateur")
+        self._join_existing_edit = QLineEdit()
+        self._join_existing_edit.setPlaceholderText("Séparateur existant (optionnel)")
+        self._join_existing_edit.setToolTip(
+            "Séparateur entre contenu existant et nouveau bloc (append/prepend). "
+            "Vide = utiliser le séparateur principal."
+        )
+        self._mode_combo = QComboBox()
+        # Affiche "replace" plutôt que "always" dans l'UI.
+        ui_modes = ["if_empty", "replace", "append", "prepend"]
+        self._mode_combo.addItems(ui_modes)
+        self._mode_combo.setCurrentText("if_empty")
+        self._skip_empty_cb = QCheckBox("Ignorer vides")
+        self._skip_empty_cb.setChecked(True)
+        remove_btn = QPushButton("Supprimer")
+        if on_remove:
+            remove_btn.clicked.connect(on_remove)
+        header_row.addWidget(QLabel("Cible:"))
+        header_row.addWidget(self._target_combo, 2)
+        header_row.addWidget(QLabel("Séparateur:"))
+        header_row.addWidget(self._separator_edit, 1)
+        header_row.addWidget(QLabel("Sep. existant:"))
+        header_row.addWidget(self._join_existing_edit, 1)
+        header_row.addWidget(QLabel("Mode:"))
+        header_row.addWidget(self._mode_combo, 1)
+        header_row.addWidget(self._skip_empty_cb, 0)
+        header_row.addStretch()
+        header_row.addWidget(remove_btn)
+        layout.addLayout(header_row)
+
+        src_header = QHBoxLayout()
+        src_header.addWidget(QLabel("Colonnes source (ordre)"), 2)
+        src_header.addWidget(QLabel("Préfixe"), 3)
+        layout.addLayout(src_header)
+
+        self._sources_list = QListWidget()
+        self._sources_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._sources_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self._sources_list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._sources_list.setDragEnabled(True)
+        self._sources_list.setAcceptDrops(True)
+        self._sources_list.setDropIndicatorShown(True)
+        layout.addWidget(self._sources_list)
+
+        btns = QHBoxLayout()
+        add_btn = QPushButton("Ajouter colonne")
+        add_btn.clicked.connect(self._add_source_row)
+        remove_btn = QPushButton("Supprimer colonne")
+        remove_btn.clicked.connect(self._remove_selected_row)
+        up_btn = QPushButton("↑")
+        up_btn.clicked.connect(lambda: self._move_selected(-1))
+        down_btn = QPushButton("↓")
+        down_btn.clicked.connect(lambda: self._move_selected(1))
+        btns.addWidget(add_btn)
+        btns.addWidget(remove_btn)
+        btns.addStretch()
+        btns.addWidget(up_btn)
+        btns.addWidget(down_btn)
+        layout.addLayout(btns)
+
+        self._add_source_row()
+
+    def _add_source_row(self, col: str = "", prefix: str = "") -> None:
+        item = QListWidgetItem()
+        widget = _ConcatSourceWidget(self._source_cols, col=col, prefix=prefix)
+        item.setSizeHint(widget.sizeHint())
+        self._sources_list.addItem(item)
+        self._sources_list.setItemWidget(item, widget)
+        self._sources_list.setCurrentItem(item)
+
+    def _remove_selected_row(self) -> None:
+        row = self._sources_list.currentRow()
+        if row >= 0:
+            item = self._sources_list.item(row)
+            widget = self._sources_list.itemWidget(item) if item else None
+            self._sources_list.takeItem(row)
+            if widget:
+                widget.deleteLater()
+
+    def _move_selected(self, delta: int) -> None:
+        row = self._sources_list.currentRow()
+        if row < 0:
+            return
+        new_row = row + delta
+        if new_row < 0 or new_row >= self._sources_list.count():
+            return
+        item = self._sources_list.item(row)
+        widget = self._sources_list.itemWidget(item) if item else None
+        self._sources_list.takeItem(row)
+        if widget:
+            widget.setParent(None)
+        self._sources_list.insertItem(new_row, item)
+        if widget:
+            self._sources_list.setItemWidget(item, widget)
+        self._sources_list.setCurrentRow(new_row)
+
+    def refresh_source_columns(self, source_cols: list[str]) -> None:
+        self._source_cols = list(source_cols)
+        for i in range(self._sources_list.count()):
+            item = self._sources_list.item(i)
+            widget = self._sources_list.itemWidget(item)
+            if isinstance(widget, _ConcatSourceWidget):
+                widget.refresh_source_cols(self._source_cols)
+
+    def refresh_target_cols(self, target_cols: list[str], current: str | None = None) -> None:
+        self._target_cols = list(target_cols)
+        cur = current if current is not None else self._target_combo.currentText()
+        items = list(self._target_cols)
+        if cur and cur not in items:
+            items.insert(0, cur)
+        self._target_combo.clear()
+        self._target_combo.addItems(items)
+        if cur:
+            self._target_combo.setCurrentText(cur)
+
+    def load_from_dict(self, d: dict) -> None:
+        self.refresh_target_cols(self._target_cols, current=str(d.get("target_col", "")).strip())
+        self._separator_edit.setText(str(d.get("separator", "; ")))
+        mode = str(d.get("overwrite_mode", "if_empty"))
+        if mode == "always":
+            mode = "replace"
+        self._mode_combo.setCurrentText(mode)
+        self._skip_empty_cb.setChecked(bool(d.get("skip_empty", True)))
+        if "join_with_existing" in d:
+            self._join_existing_edit.setText(str(d.get("join_with_existing", "")))
+        else:
+            self._join_existing_edit.setText("")
+        self._sources_list.clear()
+        for src in d.get("sources", []):
+            col = str(src.get("col", ""))
+            prefix = str(src.get("prefix", ""))
+            self._add_source_row(col=col, prefix=prefix)
+
+    def to_dict(self) -> dict:
+        sources = []
+        for i in range(self._sources_list.count()):
+            item = self._sources_list.item(i)
+            widget = self._sources_list.itemWidget(item)
+            if isinstance(widget, _ConcatSourceWidget):
+                col, prefix = widget.get_data()
+                if col:
+                    sources.append({"col": col, "prefix": prefix})
+        data = {
+            "target_col": self._target_combo.currentText().strip(),
+            "separator": self._separator_edit.text(),
+            "overwrite_mode": self._mode_combo.currentText(),
+            "skip_empty": self._skip_empty_cb.isChecked(),
+            "sources": sources,
+        }
+        join_sep = self._join_existing_edit.text()
+        if join_sep != "":
+            data["join_with_existing"] = join_sep
+        return data
 
 
 class RulesScreen(QWidget):
@@ -52,9 +271,9 @@ class RulesScreen(QWidget):
         rules_group = QGroupBox("Règles de matching")
         rules_layout = QVBoxLayout()
         self._rules_table = QTableWidget()
-        self._rules_table.setColumnCount(6)
+        self._rules_table.setColumnCount(7)
         self._rules_table.setHorizontalHeaderLabels(
-            ["Col. source", "Col. cible", "Poids", "Méthode", "Normaliser", "Sans diacritiques"]
+            ["Col. source", "Col. cible", "Poids", "Méthode", "Normaliser", "Sans diacritiques", "Sans extension"]
         )
         self._rules_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         rules_btns = QHBoxLayout()
@@ -138,8 +357,39 @@ class RulesScreen(QWidget):
         # Paramètres et Colonnes à transférer côte à côte
         params_transfer_row = QHBoxLayout()
         params_transfer_row.addWidget(params_group, 1)
-        params_transfer_row.addWidget(transfer_group, 1)
+        params_transfer_row.addWidget(transfer_group, 3)
         layout.addLayout(params_transfer_row)
+
+        # Concaténation vers colonne cible
+        concat_group = QGroupBox("Concaténation vers colonne cible")
+        concat_layout = QVBoxLayout()
+        concat_hint = QLabel(
+            "Combine plusieurs colonnes source dans une colonne cible avec un séparateur et des préfixes optionnels."
+        )
+        concat_hint.setWordWrap(True)
+        concat_hint.setStyleSheet("color: #555; font-size: 11px;")
+        concat_layout.addWidget(concat_hint)
+
+        self._concat_editors: list[_ConcatTransferEditor] = []
+        self._concat_scroll = QScrollArea()
+        self._concat_scroll.setWidgetResizable(True)
+        self._concat_container = QWidget()
+        self._concat_container_layout = QVBoxLayout(self._concat_container)
+        self._concat_container_layout.setContentsMargins(0, 0, 0, 0)
+        self._concat_container_layout.setSpacing(8)
+        self._concat_container_layout.addStretch()
+        self._concat_scroll.setWidget(self._concat_container)
+        concat_layout.addWidget(self._concat_scroll)
+
+        concat_btns = QHBoxLayout()
+        add_concat_btn = QPushButton("Ajouter concaténation")
+        add_concat_btn.clicked.connect(self._add_concat_editor)
+        concat_btns.addWidget(add_concat_btn)
+        concat_btns.addStretch()
+        concat_layout.addLayout(concat_btns)
+
+        concat_group.setLayout(concat_layout)
+        layout.addWidget(concat_group)
 
         # Bouton matching
         self._match_btn = QPushButton("Lancer matching")
@@ -150,6 +400,7 @@ class RulesScreen(QWidget):
         """Rafraîchit l'UI depuis l'état (colonnes source/cible)."""
         self._refresh_rules_combos()
         self._refresh_transfer_columns()
+        self._refresh_concat_editors()
 
     def _refresh_rules_combos(self) -> None:
         """Met à jour les combos des règles existantes avec les colonnes disponibles."""
@@ -212,6 +463,46 @@ class RulesScreen(QWidget):
             row.addWidget(target_combo)
             self._transfer_layout.addLayout(row)
 
+    def _add_concat_editor(self, preset: dict | None = None) -> None:
+        """Ajoute un éditeur de concaténation."""
+        df_src = getattr(self._state, "df_source", None)
+        df_tgt = getattr(self._state, "df_target", None)
+        src_cols = list(df_src.columns) if df_src is not None else []
+        tgt_cols = list(df_tgt.columns) if df_tgt is not None else []
+
+        editor = _ConcatTransferEditor(
+            src_cols,
+            tgt_cols,
+            on_remove=lambda: self._remove_concat_editor(editor),
+        )
+        if preset:
+            editor.load_from_dict(preset)
+        self._concat_editors.append(editor)
+        insert_at = max(0, self._concat_container_layout.count() - 1)
+        self._concat_container_layout.insertWidget(insert_at, editor)
+
+    def _remove_concat_editor(self, editor: _ConcatTransferEditor) -> None:
+        """Supprime un éditeur de concaténation."""
+        if editor in self._concat_editors:
+            self._concat_editors.remove(editor)
+        editor.setParent(None)
+        editor.deleteLater()
+
+    def _refresh_concat_editors(self) -> None:
+        """Met à jour les colonnes source des éditeurs de concaténation."""
+        df_src = getattr(self._state, "df_source", None)
+        df_tgt = getattr(self._state, "df_target", None)
+        src_cols = list(df_src.columns) if df_src is not None else []
+        tgt_cols = list(df_tgt.columns) if df_tgt is not None else []
+        if self._concat_editors:
+            for editor in self._concat_editors:
+                editor.refresh_source_columns(src_cols)
+                editor.refresh_target_cols(tgt_cols)
+            return
+        config_dict = getattr(self._state, "config_dict", {})
+        for preset in config_dict.get("concat_transfers", []):
+            self._add_concat_editor(preset=preset)
+
     def _add_rule(self) -> None:
         """Ajoute une ligne vide dans la table des règles."""
         row = self._rules_table.rowCount()
@@ -233,12 +524,14 @@ class RulesScreen(QWidget):
         norm_cb = QCheckBox()
         norm_cb.setChecked(True)
         diac_cb = QCheckBox()
+        ext_cb = QCheckBox()
         self._rules_table.setCellWidget(row, 0, src_combo)
         self._rules_table.setCellWidget(row, 1, tgt_combo)
         self._rules_table.setCellWidget(row, 2, weight_spin)
         self._rules_table.setCellWidget(row, 3, method_combo)
         self._rules_table.setCellWidget(row, 4, norm_cb)
         self._rules_table.setCellWidget(row, 5, diac_cb)
+        self._rules_table.setCellWidget(row, 6, ext_cb)
 
     def _remove_rule(self) -> None:
         """Supprime la ligne sélectionnée."""
@@ -257,7 +550,8 @@ class RulesScreen(QWidget):
             method_combo = self._rules_table.cellWidget(row, 3)
             norm_cb = self._rules_table.cellWidget(row, 4)
             diac_cb = self._rules_table.cellWidget(row, 5)
-            if not all([src_combo, tgt_combo, weight_spin, method_combo, norm_cb, diac_cb]):
+            ext_cb = self._rules_table.cellWidget(row, 6)
+            if not all([src_combo, tgt_combo, weight_spin, method_combo, norm_cb, diac_cb, ext_cb]):
                 continue
             rules.append({
                 "source_col": src_combo.currentText(),
@@ -266,6 +560,7 @@ class RulesScreen(QWidget):
                 "method": method_combo.currentText(),
                 "normalize": norm_cb.isChecked(),
                 "remove_diacritics": diac_cb.isChecked(),
+                "strip_file_extensions": ext_cb.isChecked(),
             })
         transfer_cols = []
         rename_dict = {}
@@ -296,6 +591,12 @@ class RulesScreen(QWidget):
         base["top_k"] = self._top_k_spin.value()
         base["ambiguity_delta"] = self._ambiguity_delta_spin.value()
         base["blocker"] = self._blocker_combo.currentText()
+        concat_transfers = []
+        for editor in self._concat_editors:
+            data = editor.to_dict()
+            if data["target_col"] and data["sources"]:
+                concat_transfers.append(data)
+        base["concat_transfers"] = concat_transfers
         return base
 
     def _on_matching_clicked(self) -> None:

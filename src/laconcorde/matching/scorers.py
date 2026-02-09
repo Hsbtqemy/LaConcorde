@@ -6,7 +6,7 @@ import pandas as pd
 from rapidfuzz import fuzz
 
 from laconcorde.config import FieldRule
-from laconcorde.normalize import norm_doi, norm_text
+from laconcorde.normalize import norm_doi, norm_text, strip_known_file_extensions
 
 
 def score_field(
@@ -31,18 +31,23 @@ def score_field(
         s = norm_doi(source_val)
         t = norm_doi(target_val)
     else:
+        s_val = source_val
+        t_val = target_val
+        if rule.strip_file_extensions:
+            s_val = strip_known_file_extensions(s_val)
+            t_val = strip_known_file_extensions(t_val)
         if rule.normalize:
             s = norm_text(
-                source_val,
+                s_val,
                 remove_diacritics=rule.remove_diacritics,
             )
             t = norm_text(
-                target_val,
+                t_val,
                 remove_diacritics=rule.remove_diacritics,
             )
         else:
-            s = str(source_val) if source_val is not None else ""
-            t = str(target_val) if target_val is not None else ""
+            s = str(s_val) if s_val is not None else ""
+            t = str(t_val) if t_val is not None else ""
 
     if not s and not t:
         return 100.0  # Les deux vides = match parfait

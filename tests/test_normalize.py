@@ -1,6 +1,6 @@
 """Tests de normalisation."""
 
-from laconcorde.normalize import norm_doi, norm_text
+from laconcorde.normalize import norm_doi, norm_text, strip_known_file_extensions
 
 
 def test_norm_text_basic() -> None:
@@ -65,3 +65,13 @@ def test_norm_doi_internal_spaces() -> None:
 def test_norm_doi_empty() -> None:
     assert norm_doi(None) == ""
     assert norm_doi("") == ""
+
+
+def test_strip_known_file_extensions_basic() -> None:
+    assert strip_known_file_extensions("rapport.pdf") == "rapport"
+    assert strip_known_file_extensions("photo.JPG") == "photo"
+    assert strip_known_file_extensions("scan.tiff") == "scan"
+
+
+def test_strip_known_file_extensions_multiple() -> None:
+    assert strip_known_file_extensions("archive.tar.gz") == "archive"

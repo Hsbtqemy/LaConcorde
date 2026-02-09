@@ -3,6 +3,7 @@
 import pandas as pd
 import pytest
 
+from laconcorde.config import ConcatSource, ConcatTransfer
 from laconcorde.matching.schema import MatchCandidate, MatchResult
 from laconcorde.transfer import transfer_columns
 
@@ -105,3 +106,97 @@ def test_transfer_column_rename(
     assert "categorie" not in out.columns
     assert out.iloc[0]["commentaires"] == "n1"
     assert out.iloc[0]["cat"] == "cat1"
+
+
+def test_concat_transfer_append(
+    df_source: pd.DataFrame, df_target: pd.DataFrame, results_simple: list[MatchResult]
+) -> None:
+    df_target["notes"] = ["base", ""]
+    concat = ConcatTransfer(
+        target_col="notes",
+        separator="; ",
+        overwrite_mode="append",
+        skip_empty=True,
+        sources=[
+            ConcatSource("auteur", "Auteur: "),
+            ConcatSource("categorie", "Cat: "),
+        ],
+    )
+    out = transfer_columns(
+        df_target,
+        df_source,
+        results_simple,
+        [],
+        create_missing_cols=True,
+        concat_transfers=[concat],
+    )
+    assert out.iloc[0]["notes"] == "base; Auteur: A; Cat: cat1"
+    assert out.iloc[1]["notes"] == "Auteur: B; Cat: cat2"
+
+
+def test_concat_transfer_prepend(
+    df_source: pd.DataFrame, df_target: pd.DataFrame, results_simple: list[MatchResult]
+) -> None:
+    df_target["notes"] = ["base", "other"]
+    concat = ConcatTransfer(
+        target_col="notes",
+        separator=" | ",
+        overwrite_mode="prepend",
+        skip_empty=True,
+        sources=[ConcatSource("auteur", ""), ConcatSource("notes", "N: ")],
+    )
+    out = transfer_columns(
+        df_target,
+        df_source,
+        results_simple,
+        [],
+        create_missing_cols=True,
+        concat_transfers=[concat],
+    )
+    assert out.iloc[0]["notes"].startswith("A | N: n1 | ")
+    assert out.iloc[1]["notes"].startswith("B | N: n2 | ")
+
+
+def test_concat_transfer_append_custom_join(
+    df_source: pd.DataFrame, df_target: pd.DataFrame, results_simple: list[MatchResult]
+) -> None:
+    df_target["notes"] = ["base", ""]
+    concat = ConcatTransfer(
+        target_col="notes",
+        separator="; ",
+        join_with_existing=" | ",
+        overwrite_mode="append",
+        skip_empty=True,
+        sources=[ConcatSource("auteur", "Auteur: "), ConcatSource("categorie", "Cat: ")],
+    )
+    out = transfer_columns(
+        df_target,
+        df_source,
+        results_simple,
+        [],
+        create_missing_cols=True,
+        concat_transfers=[concat],
+    )
+    assert out.iloc[0]["notes"] == "base | Auteur: A; Cat: cat1"
+
+
+def test_concat_transfer_replace(
+    df_source: pd.DataFrame, df_target: pd.DataFrame, results_simple: list[MatchResult]
+) -> None:
+    df_target["notes"] = ["old", "old2"]
+    concat = ConcatTransfer(
+        target_col="notes",
+        separator="; ",
+        overwrite_mode="replace",
+        skip_empty=True,
+        sources=[ConcatSource("auteur", "")],
+    )
+    out = transfer_columns(
+        df_target,
+        df_source,
+        results_simple,
+        [],
+        create_missing_cols=True,
+        concat_transfers=[concat],
+    )
+    assert out.iloc[0]["notes"] == "A"

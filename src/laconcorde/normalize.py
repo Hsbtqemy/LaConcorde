@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import mimetypes
 import re
 import unicodedata
+from pathlib import PurePath
 from typing import Any
 from urllib.parse import unquote
 
@@ -96,6 +98,59 @@ def norm_doi(s: str | float | int | None) -> str:
     text = text.rstrip("/")
 
     return text.strip()
+
+
+def _build_known_file_extensions() -> set[str]:
+    exts: set[str] = set()
+    for mapping in (mimetypes.types_map, mimetypes.common_types, mimetypes.suffix_map, mimetypes.encodings_map):
+        exts.update(k.lower() for k in mapping.keys())
+    return exts
+
+
+_KNOWN_FILE_EXTENSIONS = _build_known_file_extensions()
+
+
+def strip_known_file_extensions(s: str | float | int | None) -> str:
+    """
+    Supprime les extensions de fichier connues à la fin d'une chaîne.
+
+    Exemples:
+        "rapport.pdf" -> "rapport"
+        "archive.tar.gz" -> "archive"
+        "photo.JPG" -> "photo"
+    """
+    if s is None or (isinstance(s, float) and (s != s or s == float("inf"))):
+        return ""
+    text = str(s)
+    if not text:
+        return ""
+
+    # Séparer query/fragment pour éviter de casser les URLs.
+    base = text
+    suffix = ""
+    for sep in ("?", "#"):
+        if sep in base:
+            base, rest = base.split(sep, 1)
+            suffix = sep + rest
+            break
+
+    trimmed = base.rstrip()
+    if not trimmed:
+        return text
+
+    candidate = trimmed
+    # Retirer les suffixes connus en chaîne (ex: .tar.gz).
+    while True:
+        ext = PurePath(candidate).suffix
+        if not ext:
+            break
+        if ext.lower() not in _KNOWN_FILE_EXTENSIONS:
+            break
+        candidate = candidate[: -len(ext)]
+
+    # Conserver les espaces de fin éventuellement présents.
+    trailing = base[len(trimmed):]
+    return candidate + trailing + suffix
 
 
 def safe_str(val: Any) -> str:

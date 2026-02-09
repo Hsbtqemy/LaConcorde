@@ -297,16 +297,27 @@ class ValidationScreen(QWidget):
             "Si des cases sont cochées, ne traite que celles-ci."
         )
         self._auto100_btn.clicked.connect(self._auto_accept_100)
+        self._accept_auto_btn = QPushButton("Valider auto")
+        self._accept_auto_btn.setToolTip(
+            "Bascule les résultats auto en acceptés. "
+            "Si des cases sont cochées, ne traite que celles-ci."
+        )
+        self._accept_auto_btn.clicked.connect(self._accept_auto)
         self._bulk_spin = QDoubleSpinBox()
         self._bulk_spin.setRange(0, 100)
         self._bulk_spin.setValue(95)
         bulk_btn = QPushButton("Bulk accept >= X")
+        bulk_btn.setToolTip(
+            "Accepte le meilleur candidat si le score ≥ seuil. "
+            "Si des cases sont cochées, ne traite que celles-ci."
+        )
         bulk_btn.clicked.connect(self._bulk_accept)
         actions.addWidget(self._accept1_btn)
         actions.addWidget(self._reject_btn)
         actions.addWidget(self._skip_btn)
         actions.addWidget(self._undo_btn)
         actions.addWidget(self._auto100_btn)
+        actions.addWidget(self._accept_auto_btn)
         actions.addWidget(QLabel("Seuil:"))
         actions.addWidget(self._bulk_spin)
         actions.addWidget(bulk_btn)
@@ -429,17 +440,43 @@ class ValidationScreen(QWidget):
         if config is not None:
             cols = list(getattr(config, "transfer_columns", []) or [])
             rename = getattr(config, "transfer_column_rename", {}) or {}
+            concat = list(getattr(config, "concat_transfers", []) or [])
         else:
             config_dict = getattr(self._state, "config_dict", {})
             cols = list(config_dict.get("transfer_columns", []) or [])
             rename = config_dict.get("transfer_column_rename", {}) or {}
-        if not cols:
+            concat = list(config_dict.get("concat_transfers", []) or [])
+        parts: list[str] = []
+        if cols:
+            base = ", ".join(cols)
+            if rename:
+                renames = ", ".join(f"{k}→{v}" for k, v in rename.items())
+                parts.append(f"{base} (renommage: {renames})")
+            else:
+                parts.append(base)
+        concat_parts: list[str] = []
+        for c in concat:
+            if hasattr(c, "target_col"):
+                target = c.target_col
+                sources = c.sources
+            else:
+                target = c.get("target_col", "")
+                sources = c.get("sources", [])
+            src_cols: list[str] = []
+            for s in sources:
+                if hasattr(s, "col"):
+                    col = s.col
+                else:
+                    col = s.get("col", "")
+                if col:
+                    src_cols.append(col)
+            if target and src_cols:
+                concat_parts.append(f"{target} ← " + " + ".join(src_cols))
+        if concat_parts:
+            parts.append("Concat: " + "; ".join(concat_parts))
+        if not parts:
             return "Aucune colonne à transférer."
-        base = ", ".join(cols)
-        if rename:
-            renames = ", ".join(f"{k}→{v}" for k, v in rename.items())
-            return f"{base} (renommage: {renames})"
-        return base
+        return " | ".join(parts)
 
     def _show_help_dialog(self) -> None:
         rules_text = self._format_rules_summary()
@@ -507,6 +544,16 @@ class ValidationScreen(QWidget):
 
     def _select_all_visible(self) -> None:
         """Coche toutes les lignes actuellement visibles (selon le filtre)."""
+        visible_ids = self._get_visible_target_ids()
+        if visible_ids:
+            self._queue_model.select_visible_ids(visible_ids)
+
+    def _clear_selection(self) -> None:
+        """Décoche toutes les lignes."""
+        self._queue_model.clear_selection()
+
+    def _get_visible_target_ids(self) -> list[int]:
+        """Retourne les target_row_id visibles dans la file (selon le filtre)."""
         visible_ids: list[int] = []
         for proxy_row in range(self._queue_proxy.rowCount()):
             src_idx = self._queue_proxy.mapToSource(self._queue_proxy.index(proxy_row, 0))
@@ -514,12 +561,7 @@ class ValidationScreen(QWidget):
                 result = self._queue_model.get_result_at_row(src_idx.row())
                 if result is not None:
                     visible_ids.append(result.target_row_id)
-        if visible_ids:
-            self._queue_model.select_visible_ids(visible_ids)
-
-    def _clear_selection(self) -> None:
-        """Décoche toutes les lignes."""
-        self._queue_model.clear_selection()
+        return visible_ids
 
     def _on_threshold_changed(self, _value: float | None = None) -> None:
         """Met à jour le seuil de triage."""
@@ -757,8 +799,12 @@ class ValidationScreen(QWidget):
         threshold = self._bulk_spin.value()
         results = getattr(self._state, "results", [])
         status_filter = self._filter_combo.currentData() or "all"
+        selected_ids = set(self._queue_model.get_selected_target_ids())
+        apply_selected = len(selected_ids) > 0
         to_accept: list[tuple[int, int]] = []
         for r in results:
+            if apply_selected and r.target_row_id not in selected_ids:
+                continue
             if r.status != "pending" or r.is_ambiguous:
                 continue
             if not r.candidates or r.candidates[0].score < threshold:
@@ -776,7 +822,8 @@ class ValidationScreen(QWidget):
         reply = QMessageBox.question(
             self,
             "Bulk accept",
-            f"Appliquer à {len(to_accept)} lignes (pending, score ≥ {threshold:.0f}) ?",
+            f"Appliquer à {len(to_accept)} lignes "
+            f"({ 'sélection' if apply_selected else 'vue' }, pending, score ≥ {threshold:.0f}) ?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -841,6 +888,44 @@ class ValidationScreen(QWidget):
             QMessageBox.information(self, "Auto-accept 100%", f"{len(to_apply)} lignes acceptées.")
         self._update_badges()
 
+    def _accept_auto(self) -> None:
+        """Bascule les résultats auto en acceptés (avec confirmation)."""
+        results = getattr(self._state, "results", [])
+        selected_ids = set(self._queue_model.get_selected_target_ids())
+        apply_selected = len(selected_ids) > 0
+        visible_ids = None
+
+        to_apply: list[tuple[int, int]] = []
+        for r in results:
+            if r.status != "auto":
+                continue
+            if apply_selected and r.target_row_id not in selected_ids:
+                continue
+            if r.chosen_source_row_id is None:
+                continue
+            to_apply.append((r.target_row_id, r.chosen_source_row_id))
+        if not to_apply:
+            QMessageBox.information(self, "Valider auto", "Aucune ligne à traiter.")
+            return
+
+        scope = "sélection" if apply_selected else "tout"
+        reply = QMessageBox.question(
+            self,
+            "Valider auto",
+            f"Basculer {len(to_apply)} lignes (auto → accepté, {scope}) ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        choices = getattr(self._state, "choices", {})
+        for target_row_id, chosen in to_apply:
+            choices[target_row_id] = chosen
+            self._queue_model.update_result(target_row_id, chosen, status="accepted")
+        QMessageBox.information(self, "Valider auto", f"{len(to_apply)} lignes validées.")
+        self._update_badges()
+
     def _on_finalize_clicked(self) -> None:
         """Finalise la validation et appelle resolve_pending."""
         self._on_finalize()
@@ -885,4 +970,3 @@ class ValidationScreen(QWidget):
         else:
             self._tech_thresholds.setText(f"<b>Seuil triage:</b> {self._triage_spin.value():.1f}")
         self._tech_explanation.setText(f"<b>Explication:</b> {result.explanation}")
-

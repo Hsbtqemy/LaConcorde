@@ -9,6 +9,7 @@ from typing import Any
 
 VALID_METHODS = frozenset({"exact", "normalized_exact", "fuzzy_ratio", "token_set", "contains"})
 VALID_OVERWRITE_MODES = frozenset({"never", "if_empty", "always"})
+VALID_CONCAT_OVERWRITE_MODES = frozenset({"if_empty", "always", "replace", "append", "prepend"})
 VALID_BLOCKERS = frozenset({"year_or_initial", "default"})
 
 
@@ -34,6 +35,7 @@ class FieldRule:
     method: str = "fuzzy_ratio"  # exact, normalized_exact, fuzzy_ratio, token_set, contains
     normalize: bool = True
     remove_diacritics: bool = False
+    strip_file_extensions: bool = False
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> FieldRule:
@@ -41,6 +43,7 @@ class FieldRule:
         target_col = d.get("target_col", "")
         weight = float(d.get("weight", 1.0))
         method = d.get("method", "fuzzy_ratio")
+        strip_file_extensions = bool(d.get("strip_file_extensions", False))
 
         if weight <= 0:
             raise ConfigError(f"weight doit être > 0 (got {weight})")
@@ -54,6 +57,61 @@ class FieldRule:
             method=method,
             normalize=d.get("normalize", True),
             remove_diacritics=d.get("remove_diacritics", False),
+            strip_file_extensions=strip_file_extensions,
+        )
+
+
+@dataclass
+class ConcatSource:
+    """Source pour une concaténation (colonne + préfixe optionnel)."""
+
+    col: str
+    prefix: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ConcatSource:
+        col = str(d.get("col", "")).strip()
+        if not col:
+            raise ConfigError("concat source 'col' requis")
+        return cls(col=col, prefix=str(d.get("prefix", "")))
+
+
+@dataclass
+class ConcatTransfer:
+    """Concaténation de plusieurs colonnes source vers une colonne cible."""
+
+    target_col: str
+    sources: list[ConcatSource] = field(default_factory=list)
+    separator: str = "; "
+    overwrite_mode: str = "if_empty"  # if_empty, always/replace, append, prepend
+    skip_empty: bool = True
+    join_with_existing: str | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ConcatTransfer:
+        target_col = str(d.get("target_col", "")).strip()
+        if not target_col:
+            raise ConfigError("concat target_col requis")
+        separator = str(d.get("separator", "; "))
+        overwrite_mode = str(d.get("overwrite_mode", "if_empty"))
+        if overwrite_mode not in VALID_CONCAT_OVERWRITE_MODES:
+            raise ConfigError(
+                f"concat overwrite_mode invalide: {overwrite_mode!r}. "
+                f"Valides: {sorted(VALID_CONCAT_OVERWRITE_MODES)}"
+            )
+        sources = [ConcatSource.from_dict(s) for s in d.get("sources", [])]
+        if not sources:
+            raise ConfigError("concat sources requis (liste non vide)")
+        join_with_existing = None
+        if "join_with_existing" in d:
+            join_with_existing = str(d.get("join_with_existing", ""))
+        return cls(
+            target_col=target_col,
+            sources=sources,
+            separator=separator,
+            overwrite_mode=overwrite_mode,
+            skip_empty=bool(d.get("skip_empty", True)),
+            join_with_existing=join_with_existing,
         )
 
 
@@ -69,6 +127,8 @@ class Config:
     single_file: str | None = None
     source_sheet_in_single: str | None = None
     target_sheet_in_single: str | None = None
+    source_header_row: int = 1
+    target_header_row: int = 1
 
     rules: list[FieldRule] = field(default_factory=list)
     transfer_columns: list[str] = field(default_factory=list)
@@ -76,6 +136,7 @@ class Config:
     overwrite_mode: str = "if_empty"  # never, if_empty, always
     create_missing_cols: bool = True
     suffix_on_collision: str = "_src"
+    concat_transfers: list[ConcatTransfer] = field(default_factory=list)
 
     min_score: float = 0.0
     auto_accept_score: float = 95.0
@@ -86,9 +147,14 @@ class Config:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Config:
         rules = [FieldRule.from_dict(r) for r in d.get("rules", [])]
+        concat_transfers = [ConcatTransfer.from_dict(c) for c in d.get("concat_transfers", [])]
         single_file = d.get("single_file")
         source_file = d.get("source_file", "")
         target_file = d.get("target_file", "")
+        src_header_raw = d.get("source_header_row", 1)
+        tgt_header_raw = d.get("target_header_row", 1)
+        source_header_row = 1 if src_header_raw is None else int(src_header_raw)
+        target_header_row = 1 if tgt_header_raw is None else int(tgt_header_raw)
         overwrite_mode = d.get("overwrite_mode", "if_empty")
         min_score = float(d.get("min_score", 0.0))
         auto_accept_score = float(d.get("auto_accept_score", 95.0))
@@ -105,6 +171,10 @@ class Config:
 
         if overwrite_mode not in VALID_OVERWRITE_MODES:
             raise ConfigError(f"overwrite_mode invalide: {overwrite_mode!r}. Valides: {sorted(VALID_OVERWRITE_MODES)}")
+        if source_header_row < 1:
+            raise ConfigError(f"source_header_row doit être >= 1 (got {source_header_row})")
+        if target_header_row < 1:
+            raise ConfigError(f"target_header_row doit être >= 1 (got {target_header_row})")
         if not 0 <= min_score <= 100:
             raise ConfigError(f"min_score doit être entre 0 et 100 (got {min_score})")
         if not 0 <= auto_accept_score <= 100:
@@ -124,12 +194,15 @@ class Config:
             single_file=single_file,
             source_sheet_in_single=d.get("source_sheet_in_single"),
             target_sheet_in_single=d.get("target_sheet_in_single"),
+            source_header_row=source_header_row,
+            target_header_row=target_header_row,
             rules=rules,
             transfer_columns=d.get("transfer_columns", []),
             transfer_column_rename=d.get("transfer_column_rename", {}),
             overwrite_mode=overwrite_mode,
             create_missing_cols=d.get("create_missing_cols", True),
             suffix_on_collision=d.get("suffix_on_collision", "_src"),
+            concat_transfers=concat_transfers,
             min_score=min_score,
             auto_accept_score=auto_accept_score,
             top_k=top_k,
