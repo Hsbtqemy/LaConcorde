@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QStackedWidget,
     QTableView,
@@ -229,12 +230,27 @@ class TemplateBuilderScreen(QWidget):
     def refresh_from_state(self) -> None:
         config = getattr(self._state, "template_builder_config", {})
         self._zones = list(config.get("zones", []))
+        if hasattr(self, "_multi_zone_rb") and len(self._zones) > 1:
+            self._multi_zone_rb.setChecked(True)
+        elif hasattr(self, "_single_zone_rb"):
+            self._single_zone_rb.setChecked(True)
         self._refresh_zone_lists()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
-        self._step_label = QLabel("Étape 1/5 : Import")
-        layout.addWidget(self._step_label)
+        self._step_names = ["Import", "Zones", "Mapping", "Agrégation", "Export"]
+        stepper_row = QHBoxLayout()
+        self._stepper_labels: list[QLabel] = []
+        for i, name in enumerate(self._step_names):
+            label = QLabel(name)
+            self._stepper_labels.append(label)
+            stepper_row.addWidget(label)
+            if i < len(self._step_names) - 1:
+                stepper_row.addWidget(QLabel("→"))
+        stepper_row.addStretch()
+        layout.addLayout(stepper_row)
+        self._step_title = QLabel("Étape 1 — Import")
+        layout.addWidget(self._step_title)
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_import_page())
@@ -245,10 +261,13 @@ class TemplateBuilderScreen(QWidget):
         layout.addWidget(self._stack)
 
         nav = QHBoxLayout()
+        self._restart_btn = QPushButton("Recommencer")
+        self._restart_btn.clicked.connect(self._restart_flow)
         self._back_btn = QPushButton("Retour")
         self._back_btn.clicked.connect(self._prev_step)
         self._next_btn = QPushButton("Suivant")
         self._next_btn.clicked.connect(self._next_step)
+        nav.addWidget(self._restart_btn)
         nav.addWidget(self._back_btn)
         nav.addStretch()
         nav.addWidget(self._next_btn)
@@ -333,7 +352,20 @@ class TemplateBuilderScreen(QWidget):
 
     def _build_zones_page(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
+        outer = QVBoxLayout(page)
+
+        mode_row = QHBoxLayout()
+        self._single_zone_rb = QRadioButton("Une seule zone")
+        self._multi_zone_rb = QRadioButton("Plusieurs zones")
+        self._single_zone_rb.setChecked(True)
+        self._single_zone_rb.toggled.connect(self._on_zone_mode_changed)
+        mode_row.addWidget(self._single_zone_rb)
+        mode_row.addWidget(self._multi_zone_rb)
+        mode_row.addStretch()
+        outer.addLayout(mode_row)
+
+        layout = QHBoxLayout()
+        outer.addLayout(layout)
 
         left = QVBoxLayout()
         self._zones_list = QListWidget()
@@ -347,6 +379,8 @@ class TemplateBuilderScreen(QWidget):
         left.addWidget(add_btn)
         left.addWidget(remove_btn)
         left.addStretch()
+        self._zones_panel = QWidget()
+        self._zones_panel.setLayout(left)
 
         right = QVBoxLayout()
         form_group = QGroupBox("Définition de zone")
@@ -381,25 +415,50 @@ class TemplateBuilderScreen(QWidget):
         form.addRow("Colonne début:", self._col_start_spin)
         form.addRow("Colonne fin:", col_end_row)
 
+        form.addRow(QLabel("Lignes à définir"))
+
+        self._title_rows_cb = QCheckBox("Titres (template)")
         self._title_rows_edit = QLineEdit()
         self._title_rows_edit.setPlaceholderText("Ex: 1,2")
+        self._title_rows_cb.toggled.connect(lambda v: self._title_rows_edit.setEnabled(v))
+        title_row = QHBoxLayout()
+        title_row.addWidget(self._title_rows_cb)
+        title_row.addWidget(self._title_rows_edit, 1)
+        form.addRow("", title_row)
+
+        self._label_rows_cb = QCheckBox("Labels")
         self._label_rows_edit = QLineEdit()
         self._label_rows_edit.setPlaceholderText("Ex: 3")
+        self._label_rows_cb.toggled.connect(lambda v: self._label_rows_edit.setEnabled(v))
+        label_row = QHBoxLayout()
+        label_row.addWidget(self._label_rows_cb)
+        label_row.addWidget(self._label_rows_edit, 1)
+        form.addRow("", label_row)
+
+        self._tech_row_cb = QCheckBox("Champs cible")
+        self._tech_row_cb.setChecked(True)
+        self._tech_row_cb.setEnabled(False)
         self._tech_row_spin = QSpinBox()
         self._tech_row_spin.setRange(1, 1000000)
+        self._detect_term_edit = QLineEdit()
+        self._detect_term_edit.setPlaceholderText("Terme exact")
+        self._detect_btn = QPushButton("Trouver ligne…")
+        self._detect_btn.clicked.connect(self._auto_detect_tech_row)
+        tech_row = QHBoxLayout()
+        tech_row.addWidget(self._tech_row_cb)
+        tech_row.addWidget(self._tech_row_spin)
+        tech_row.addWidget(self._detect_term_edit, 2)
+        tech_row.addWidget(self._detect_btn)
+        form.addRow("", tech_row)
+
+        self._prefix_row_cb = QCheckBox("Préfixes")
         self._prefix_row_spin = QSpinBox()
         self._prefix_row_spin.setRange(1, 1000000)
-        self._prefix_row_none = QCheckBox("Aucun")
-        self._prefix_row_none.setChecked(True)
-        self._prefix_row_none.toggled.connect(lambda v: self._prefix_row_spin.setEnabled(not v))
-
-        form.addRow("Titre(s) lignes:", self._title_rows_edit)
-        form.addRow("Libellés lignes:", self._label_rows_edit)
-        form.addRow("Ligne technique:", self._tech_row_spin)
+        self._prefix_row_cb.toggled.connect(lambda v: self._prefix_row_spin.setEnabled(v))
         prefix_row = QHBoxLayout()
+        prefix_row.addWidget(self._prefix_row_cb)
         prefix_row.addWidget(self._prefix_row_spin)
-        prefix_row.addWidget(self._prefix_row_none)
-        form.addRow("Ligne préfixes:", prefix_row)
+        form.addRow("", prefix_row)
 
         self._data_start_spin = QSpinBox()
         self._data_start_spin.setRange(1, 1000000)
@@ -411,18 +470,12 @@ class TemplateBuilderScreen(QWidget):
         data_start_row.addWidget(self._data_start_auto)
         form.addRow("Début données:", data_start_row)
 
-        self._aggregate_cb = QCheckBox("Agréger plusieurs lignes")
-        self._group_by_combo = QComboBox()
-        form.addRow("", self._aggregate_cb)
-        form.addRow("ID (group_by):", self._group_by_combo)
-
-        self._detect_term_edit = QLineEdit()
-        self._detect_btn = QPushButton("Trouver ligne technique")
-        self._detect_btn.clicked.connect(self._auto_detect_tech_row)
-        detect_row = QHBoxLayout()
-        detect_row.addWidget(self._detect_term_edit)
-        detect_row.addWidget(self._detect_btn)
-        form.addRow("Terme exact:", detect_row)
+        self._title_rows_cb.setChecked(False)
+        self._title_rows_edit.setEnabled(False)
+        self._label_rows_cb.setChecked(False)
+        self._label_rows_edit.setEnabled(False)
+        self._prefix_row_cb.setChecked(False)
+        self._prefix_row_spin.setEnabled(False)
 
         form_group.setLayout(form)
         right.addWidget(form_group)
@@ -444,8 +497,9 @@ class TemplateBuilderScreen(QWidget):
         right.addWidget(save_btn)
         right.addStretch()
 
-        layout.addLayout(left, 1)
+        layout.addWidget(self._zones_panel, 1)
         layout.addLayout(right, 3)
+        self._zones_panel.setVisible(False)
         return page
 
     def _build_mapping_page(self) -> QWidget:
@@ -588,16 +642,18 @@ class TemplateBuilderScreen(QWidget):
     def _update_step_controls(self) -> None:
         idx = self._stack.currentIndex()
         self._back_btn.setEnabled(idx > 0)
-        self._next_btn.setEnabled(idx < self._stack.count() - 1)
-        titles = [
-            "Étape 1/5 : Import",
-            "Étape 2/5 : Zones",
-            "Étape 3/5 : Mapping",
-            "Étape 4/5 : Agrégation",
-            "Étape 5/5 : Export",
-        ]
-        if 0 <= idx < len(titles):
-            self._step_label.setText(titles[idx])
+        is_last = idx >= self._stack.count() - 1
+        self._next_btn.setEnabled(not is_last)
+        self._next_btn.setVisible(not is_last)
+        if 0 <= idx < len(self._step_names):
+            self._step_title.setText(f"Étape {idx + 1} — {self._step_names[idx]}")
+            for i, label in enumerate(self._stepper_labels):
+                if i == idx:
+                    label.setStyleSheet("font-weight: 600; color: #111;")
+                elif i < idx:
+                    label.setStyleSheet("color: #444;")
+                else:
+                    label.setStyleSheet("color: #888;")
 
     def _next_step(self) -> None:
         idx = self._stack.currentIndex()
@@ -681,8 +737,6 @@ class TemplateBuilderScreen(QWidget):
                 f"Source: {self._source_df.shape[0]} lignes × {self._source_df.shape[1]} colonnes"
             )
 
-            self._group_by_combo.clear()
-            self._group_by_combo.addItems(list(self._source_df.columns))
             self._agg_group_by.clear()
             self._agg_group_by.addItems(list(self._source_df.columns))
         except Exception as e:
@@ -761,7 +815,8 @@ class TemplateBuilderScreen(QWidget):
             self._load_previews()
         QMessageBox.information(self, "Config", f"Configuration chargée:\n{path}")
 
-    def _refresh_zone_lists(self) -> None:
+    def _refresh_zone_lists(self, select_index: int | None = None) -> None:
+        current_idx = self._zones_list.currentRow()
         self._zones_list.clear()
         self._mapping_zone_list.clear()
         self._agg_zone_list.clear()
@@ -771,10 +826,42 @@ class TemplateBuilderScreen(QWidget):
             self._mapping_zone_list.addItem(name)
             self._agg_zone_list.addItem(name)
         if self._zones:
-            self._zones_list.setCurrentRow(0)
-            self._mapping_zone_list.setCurrentRow(0)
-            self._agg_zone_list.setCurrentRow(0)
+            idx = current_idx if select_index is None else select_index
+            if idx < 0 or idx >= len(self._zones):
+                idx = 0
+            self._zones_list.setCurrentRow(idx)
+            self._mapping_zone_list.setCurrentRow(idx)
+            self._agg_zone_list.setCurrentRow(idx)
         self._refresh_preview_zone_combo()
+
+    def _on_zone_mode_changed(self) -> None:
+        if self._single_zone_rb.isChecked():
+            self._set_zone_mode("single")
+        else:
+            self._set_zone_mode("multi")
+
+    def _set_zone_mode(self, mode: str) -> None:
+        if mode == "single":
+            if len(self._zones) > 1:
+                reply = QMessageBox.question(
+                    self,
+                    "Zone unique",
+                    "Passer en zone unique supprimera les zones supplémentaires. Continuer ?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    self._multi_zone_rb.setChecked(True)
+                    return
+                self._zones = [self._zones[0]]
+            if not self._zones:
+                self._new_zone()
+            self._zones_panel.setVisible(False)
+            self._refresh_zone_lists(select_index=0)
+        else:
+            self._zones_panel.setVisible(True)
+            if not self._zones:
+                self._new_zone()
+            self._refresh_zone_lists(select_index=0)
 
     def _refresh_preview_zone_combo(self) -> None:
         if not hasattr(self, "_preview_zone_combo"):
@@ -803,10 +890,19 @@ class TemplateBuilderScreen(QWidget):
         self._label_rows_edit.setText("")
         self._tech_row_spin.setValue(1)
         self._prefix_row_spin.setValue(1)
-        self._prefix_row_none.setChecked(True)
+        self._title_rows_cb.setChecked(False)
+        self._label_rows_cb.setChecked(False)
+        self._prefix_row_cb.setChecked(False)
         self._data_start_spin.setValue(1)
         self._data_start_auto.setChecked(True)
-        self._aggregate_cb.setChecked(False)
+        # Ajouter une zone par défaut pour la rendre visible immédiatement
+        zone = self._collect_zone_form()
+        if zone is None:
+            return
+        self._zones.append(zone)
+        self._editing_zone_index = len(self._zones) - 1
+        self._invalidate_preview_cache()
+        self._refresh_zone_lists(select_index=self._editing_zone_index)
 
     def _remove_zone(self) -> None:
         row = self._zones_list.currentRow()
@@ -815,6 +911,24 @@ class TemplateBuilderScreen(QWidget):
         del self._zones[row]
         self._invalidate_preview_cache()
         self._refresh_zone_lists()
+
+    def _clear_zone_form_defaults(self) -> None:
+        self._zone_name_edit.setText("")
+        self._row_start_spin.setValue(1)
+        self._row_end_spin.setValue(1)
+        self._row_end_auto.setChecked(True)
+        self._col_start_spin.setValue(1)
+        self._col_end_spin.setValue(1)
+        self._col_end_auto.setChecked(True)
+        self._title_rows_edit.setText("")
+        self._label_rows_edit.setText("")
+        self._tech_row_spin.setValue(1)
+        self._prefix_row_spin.setValue(1)
+        self._title_rows_cb.setChecked(False)
+        self._label_rows_cb.setChecked(False)
+        self._prefix_row_cb.setChecked(False)
+        self._data_start_spin.setValue(1)
+        self._data_start_auto.setChecked(True)
 
     def _collect_zone_form(self) -> dict[str, Any] | None:
         name = self._zone_name_edit.text().strip()
@@ -825,11 +939,14 @@ class TemplateBuilderScreen(QWidget):
         row_end = None if self._row_end_auto.isChecked() else self._row_end_spin.value()
         col_start = self._col_start_spin.value()
         col_end = None if self._col_end_auto.isChecked() else self._col_end_spin.value()
-        title_rows = _parse_int_list(self._title_rows_edit.text())
-        label_rows = _parse_int_list(self._label_rows_edit.text())
+        title_rows = _parse_int_list(self._title_rows_edit.text()) if self._title_rows_cb.isChecked() else []
+        label_rows = _parse_int_list(self._label_rows_edit.text()) if self._label_rows_cb.isChecked() else []
         tech_row = self._tech_row_spin.value()
-        prefix_row = None if self._prefix_row_none.isChecked() else self._prefix_row_spin.value()
+        prefix_row = self._prefix_row_spin.value() if self._prefix_row_cb.isChecked() else None
         data_start = None if self._data_start_auto.isChecked() else self._data_start_spin.value()
+        existing = self._zones[self._editing_zone_index] if self._editing_zone_index is not None else {}
+        aggregate = bool(existing.get("aggregate", False))
+        group_by = existing.get("group_by")
         return {
             "name": name,
             "row_start": row_start,
@@ -837,8 +954,8 @@ class TemplateBuilderScreen(QWidget):
             "col_start": col_start,
             "col_end": col_end,
             "data_start_row": data_start,
-            "aggregate": self._aggregate_cb.isChecked(),
-            "group_by": self._group_by_combo.currentText() or None,
+            "aggregate": aggregate,
+            "group_by": group_by,
             "header": {
                 "title_rows": title_rows,
                 "label_rows": label_rows,
@@ -852,12 +969,21 @@ class TemplateBuilderScreen(QWidget):
         zone = self._collect_zone_form()
         if zone is None:
             return
-        if self._editing_zone_index is None:
-            self._zones.append(zone)
+        is_single = hasattr(self, "_single_zone_rb") and self._single_zone_rb.isChecked()
+        if is_single:
+            if self._zones:
+                self._zones[0] = zone
+            else:
+                self._zones.append(zone)
+            self._editing_zone_index = 0
         else:
-            self._zones[self._editing_zone_index] = zone
+            if self._editing_zone_index is None:
+                self._zones.append(zone)
+                self._editing_zone_index = len(self._zones) - 1
+            else:
+                self._zones[self._editing_zone_index] = zone
         self._invalidate_preview_cache()
-        self._refresh_zone_lists()
+        self._refresh_zone_lists(select_index=self._editing_zone_index)
 
     def _load_zone_into_form(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._zones):
@@ -880,14 +1006,22 @@ class TemplateBuilderScreen(QWidget):
             self._col_end_auto.setChecked(False)
             self._col_end_spin.setValue(int(col_end))
         header = zone.get("header", {})
-        self._title_rows_edit.setText(_format_int_list(header.get("title_rows", [])))
-        self._label_rows_edit.setText(_format_int_list(header.get("label_rows", [])))
+        title_rows = header.get("title_rows", [])
+        label_rows = header.get("label_rows", [])
+        self._title_rows_cb.setChecked(bool(title_rows))
+        self._title_rows_edit.setEnabled(bool(title_rows))
+        self._title_rows_edit.setText(_format_int_list(title_rows))
+        self._label_rows_cb.setChecked(bool(label_rows))
+        self._label_rows_edit.setEnabled(bool(label_rows))
+        self._label_rows_edit.setText(_format_int_list(label_rows))
         self._tech_row_spin.setValue(int(header.get("tech_row", 1)))
         prefix_row = header.get("prefix_row")
         if prefix_row is None:
-            self._prefix_row_none.setChecked(True)
+            self._prefix_row_cb.setChecked(False)
+            self._prefix_row_spin.setEnabled(False)
         else:
-            self._prefix_row_none.setChecked(False)
+            self._prefix_row_cb.setChecked(True)
+            self._prefix_row_spin.setEnabled(True)
             self._prefix_row_spin.setValue(int(prefix_row))
         data_start = zone.get("data_start_row")
         if data_start is None:
@@ -895,10 +1029,6 @@ class TemplateBuilderScreen(QWidget):
         else:
             self._data_start_auto.setChecked(False)
             self._data_start_spin.setValue(int(data_start))
-        self._aggregate_cb.setChecked(bool(zone.get("aggregate", False)))
-        group_by = zone.get("group_by")
-        if group_by:
-            self._group_by_combo.setCurrentText(group_by)
 
     def _use_selection_for_zone(self) -> None:
         sel = self._zone_preview_table.selectionModel().selectedIndexes()
@@ -1140,6 +1270,48 @@ class TemplateBuilderScreen(QWidget):
         zone["aggregate"] = self._agg_cb.isChecked()
         zone["group_by"] = self._agg_group_by.currentText() or None
         self._invalidate_preview_cache()
+
+    def _restart_flow(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Recommencer",
+            "Cela effacera les zones et mappings actuels. Continuer ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._template_df_raw = None
+        self._source_df = None
+        self._zones = []
+        self._editing_zone_index = None
+        self._current_mapping_cols = []
+        self._preview_frames = {}
+        self._preview_cache_key = None
+        self._preview_cache_frames = {}
+        self._state.template_builder_config = {}
+
+        self._template_file_edit.setText("")
+        self._source_file_edit.setText("")
+        self._template_sheet_combo.clear()
+        self._source_sheet_combo.clear()
+        self._source_header_spin.setValue(1)
+        self._output_mode_combo.setCurrentText("single")
+        self._output_sheet_edit.setText("Output")
+        self._out_xlsx_edit.setText("")
+        if hasattr(self, "_single_zone_rb"):
+            self._single_zone_rb.setChecked(True)
+
+        self._template_table.model().set_dataframe(pd.DataFrame())
+        self._source_table.model().set_dataframe(pd.DataFrame())
+        self._template_label.setText("Template: —")
+        self._source_label.setText("Source: —")
+        self._mapping_table.setRowCount(0)
+
+        self._clear_zone_form_defaults()
+        self._invalidate_preview_cache()
+        self._refresh_zone_lists()
+        self._stack.setCurrentIndex(0)
+        self._update_step_controls()
 
     def _export(self) -> None:
         out_path = self._out_xlsx_edit.text().strip()
