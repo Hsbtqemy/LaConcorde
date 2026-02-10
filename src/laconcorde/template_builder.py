@@ -54,6 +54,7 @@ class ConcatFieldSpec:
 @dataclass
 class FieldMappingSpec:
     col_index: int
+    target: str | None = None
     mode: str = "simple"  # simple | concat
     source_col: str | None = None
     concat: ConcatFieldSpec | None = None
@@ -66,6 +67,7 @@ class FieldMappingSpec:
             concat = ConcatFieldSpec.from_dict(d.get("concat", {}))
         return cls(
             col_index=int(d.get("col_index", 0)),
+            target=d.get("target"),
             mode=mode,
             source_col=d.get("source_col"),
             concat=concat,
@@ -189,7 +191,19 @@ def _build_zone_output(zone: ZoneSpec, df_template: pd.DataFrame, df_source: pd.
 
     header_block = zone_raw.iloc[:header_rows_count, :]
 
-    mappings = {m.col_index: m for m in zone.field_mappings}
+    tech_row_idx = zone.header.tech_row - zone.row_start
+    labels: list[str] = []
+    if 0 <= tech_row_idx < len(zone_raw):
+        labels = [
+            "" if pd.isna(v) else str(v)
+            for v in zone_raw.iloc[tech_row_idx, :].tolist()
+        ]
+    mappings: dict[int, FieldMappingSpec] = {}
+    for m in zone.field_mappings:
+        col_idx = _resolve_mapping_col_index(m, labels, zone_width)
+        if col_idx is None:
+            continue
+        mappings[col_idx] = m
 
     data_rows: list[list[object]] = []
     if zone.aggregate and zone.group_by:
@@ -325,3 +339,17 @@ def _normalize_row(row: list[object], width: int) -> list[object]:
     elif len(row) > width:
         row = row[:width]
     return ["" if pd.isna(v) else v for v in row]
+
+
+def _resolve_mapping_col_index(
+    mapping: FieldMappingSpec,
+    labels: list[str],
+    width: int,
+) -> int | None:
+    if mapping.target:
+        for idx, label in enumerate(labels):
+            if label == str(mapping.target):
+                return idx
+    if 0 <= mapping.col_index < width:
+        return mapping.col_index
+    return None

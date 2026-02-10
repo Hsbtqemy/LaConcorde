@@ -221,6 +221,7 @@ class TemplateBuilderScreen(QWidget):
         self._zones: list[dict[str, Any]] = list(getattr(self._state, "template_builder_config", {}).get("zones", []))
         self._editing_zone_index: int | None = None
         self._current_mapping_cols: list[int] = []
+        self._current_mapping_labels: list[str] = []
         self._worker: TemplateBuilderWorker | None = None
         self._preview_frames: dict[str, Any] = {}
         self._preview_cache_key: str | None = None
@@ -1103,9 +1104,11 @@ class TemplateBuilderScreen(QWidget):
         zone = self._zones[idx]
         targets = self._get_zone_target_columns(zone)
         self._current_mapping_cols = [t["col_index"] for t in targets]
+        self._current_mapping_labels = [t["label"] for t in targets]
         self._mapping_table.setRowCount(len(targets))
         source_cols = list(self._source_df.columns) if self._source_df is not None else []
         mapping_by_col = {m.get("col_index"): m for m in zone.get("field_mappings", [])}
+        mapping_by_target = {m.get("target"): m for m in zone.get("field_mappings", []) if m.get("target")}
 
         for row_idx, target in enumerate(targets):
             col_index = target["col_index"]
@@ -1115,7 +1118,7 @@ class TemplateBuilderScreen(QWidget):
 
             mode_combo = QComboBox()
             mode_combo.addItems(["ignore", "simple", "concat"])
-            mapping = mapping_by_col.get(col_index)
+            mapping = mapping_by_target.get(label) or mapping_by_col.get(col_index)
             mode = mapping.get("mode", "ignore") if mapping else "ignore"
             default_source = ""
             if not mapping:
@@ -1124,10 +1127,11 @@ class TemplateBuilderScreen(QWidget):
                     default_source = label
                     data = {
                         "col_index": col_index,
+                        "target": label,
                         "mode": "simple",
                         "source_col": label,
                     }
-                    self._set_mapping(zone, col_index, data)
+                    self._set_mapping(zone, label, col_index, data)
             mode_combo.setCurrentText(mode)
             mode_combo.currentTextChanged.connect(lambda text, r=row_idx: self._on_mode_changed(r, text))
             self._mapping_table.setCellWidget(row_idx, 2, mode_combo)
@@ -1172,7 +1176,8 @@ class TemplateBuilderScreen(QWidget):
         if zone is None:
             return
         col_index = self._current_mapping_cols[row_idx]
-        mapping = self._get_mapping_by_col(zone, col_index)
+        label = self._current_mapping_labels[row_idx]
+        mapping = self._get_mapping(zone, label, col_index)
         preset = mapping.get("concat") if mapping else None
         source_cols = list(self._source_df.columns) if self._source_df is not None else []
         dlg = _ConcatDialog(source_cols, preset=preset, parent=self)
@@ -1207,10 +1212,11 @@ class TemplateBuilderScreen(QWidget):
         if zone is None:
             return
         col_index = self._current_mapping_cols[row_idx]
-        mapping = self._get_mapping_by_col(zone, col_index)
+        label = self._current_mapping_labels[row_idx]
+        mapping = self._get_mapping(zone, label, col_index)
         mode = mode_override or (mapping.get("mode") if mapping else "ignore")
         if mode == "ignore":
-            self._remove_mapping(zone, col_index)
+            self._remove_mapping(zone, label, col_index)
             self._invalidate_preview_cache()
             self._mapping_table.setItem(row_idx, 5, QTableWidgetItem(""))
             return
@@ -1223,10 +1229,11 @@ class TemplateBuilderScreen(QWidget):
                     source_col = source_widget.currentText()
             data = {
                 "col_index": col_index,
+                "target": label,
                 "mode": "simple",
                 "source_col": source_col or "",
             }
-            self._set_mapping(zone, col_index, data)
+            self._set_mapping(zone, label, col_index, data)
             self._invalidate_preview_cache()
             self._mapping_table.setItem(row_idx, 5, QTableWidgetItem(""))
             return
@@ -1237,21 +1244,30 @@ class TemplateBuilderScreen(QWidget):
                 concat = mapping.get("concat")
             data = {
                 "col_index": col_index,
+                "target": label,
                 "mode": "concat",
                 "concat": concat or {},
             }
-            self._set_mapping(zone, col_index, data)
+            self._set_mapping(zone, label, col_index, data)
             self._invalidate_preview_cache()
             self._mapping_table.setItem(row_idx, 5, QTableWidgetItem(self._format_concat_summary(concat)))
 
-    def _get_mapping_by_col(self, zone: dict[str, Any], col_index: int) -> dict[str, Any] | None:
+    def _get_mapping(self, zone: dict[str, Any], target: str, col_index: int) -> dict[str, Any] | None:
+        for m in zone.get("field_mappings", []):
+            if target and m.get("target") == target:
+                return m
         for m in zone.get("field_mappings", []):
             if m.get("col_index") == col_index:
                 return m
         return None
 
-    def _set_mapping(self, zone: dict[str, Any], col_index: int, data: dict[str, Any]) -> None:
+    def _set_mapping(self, zone: dict[str, Any], target: str, col_index: int, data: dict[str, Any]) -> None:
         mappings = list(zone.get("field_mappings", []))
+        for i, m in enumerate(mappings):
+            if target and m.get("target") == target:
+                mappings[i] = data
+                zone["field_mappings"] = mappings
+                return
         for i, m in enumerate(mappings):
             if m.get("col_index") == col_index:
                 mappings[i] = data
@@ -1260,8 +1276,14 @@ class TemplateBuilderScreen(QWidget):
         mappings.append(data)
         zone["field_mappings"] = mappings
 
-    def _remove_mapping(self, zone: dict[str, Any], col_index: int) -> None:
-        mappings = [m for m in zone.get("field_mappings", []) if m.get("col_index") != col_index]
+    def _remove_mapping(self, zone: dict[str, Any], target: str, col_index: int) -> None:
+        mappings = []
+        for m in zone.get("field_mappings", []):
+            if target and m.get("target") == target:
+                continue
+            if m.get("col_index") == col_index:
+                continue
+            mappings.append(m)
         zone["field_mappings"] = mappings
 
     def _current_zone_for_mapping(self) -> dict[str, Any] | None:
