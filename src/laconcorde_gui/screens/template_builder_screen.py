@@ -274,6 +274,8 @@ class TemplateBuilderScreen(QWidget):
         layout.addLayout(nav)
 
         self._update_step_controls()
+        # Appliquer le mode par défaut (zone unique)
+        self._set_zone_mode("single")
 
     def _build_import_page(self) -> QWidget:
         page = QWidget()
@@ -386,8 +388,9 @@ class TemplateBuilderScreen(QWidget):
         form_group = QGroupBox("Définition de zone")
         form = QFormLayout()
 
+        self._zone_name_label = QLabel("Nom:")
         self._zone_name_edit = QLineEdit()
-        form.addRow("Nom:", self._zone_name_edit)
+        form.addRow(self._zone_name_label, self._zone_name_edit)
 
         self._row_start_spin = QSpinBox()
         self._row_start_spin.setRange(1, 1000000)
@@ -477,6 +480,13 @@ class TemplateBuilderScreen(QWidget):
         self._prefix_row_cb.setChecked(False)
         self._prefix_row_spin.setEnabled(False)
 
+        if self._single_zone_rb.isChecked():
+            self._zone_name_label.setVisible(False)
+            self._zone_name_edit.setVisible(False)
+        else:
+            self._zone_name_label.setVisible(True)
+            self._zone_name_edit.setVisible(True)
+
         form_group.setLayout(form)
         right.addWidget(form_group)
 
@@ -512,6 +522,8 @@ class TemplateBuilderScreen(QWidget):
         left.addWidget(QLabel("Zones"))
         left.addWidget(self._mapping_zone_list)
         left.addStretch()
+        self._mapping_zone_panel = QWidget()
+        self._mapping_zone_panel.setLayout(left)
 
         right = QVBoxLayout()
         self._mapping_table = QTableWidget()
@@ -523,7 +535,7 @@ class TemplateBuilderScreen(QWidget):
         right.addWidget(self._mapping_table)
         right.addStretch()
 
-        layout.addLayout(left, 1)
+        layout.addWidget(self._mapping_zone_panel, 1)
         layout.addLayout(right, 3)
         return page
 
@@ -537,6 +549,8 @@ class TemplateBuilderScreen(QWidget):
         left.addWidget(QLabel("Zones"))
         left.addWidget(self._agg_zone_list)
         left.addStretch()
+        self._agg_zone_panel = QWidget()
+        self._agg_zone_panel.setLayout(left)
 
         right = QVBoxLayout()
         group = QGroupBox("Agrégation")
@@ -551,7 +565,7 @@ class TemplateBuilderScreen(QWidget):
         right.addWidget(group)
         right.addStretch()
 
-        layout.addLayout(left, 1)
+        layout.addWidget(self._agg_zone_panel, 1)
         layout.addLayout(right, 3)
         return page
 
@@ -856,9 +870,19 @@ class TemplateBuilderScreen(QWidget):
             if not self._zones:
                 self._new_zone()
             self._zones_panel.setVisible(False)
+            self._mapping_zone_panel.setVisible(False)
+            self._agg_zone_panel.setVisible(False)
+            self._zone_name_label.setVisible(False)
+            self._zone_name_edit.setVisible(False)
+            if self._zones:
+                self._zones[0]["name"] = self._zones[0].get("name") or "Zone unique"
             self._refresh_zone_lists(select_index=0)
         else:
             self._zones_panel.setVisible(True)
+            self._mapping_zone_panel.setVisible(True)
+            self._agg_zone_panel.setVisible(True)
+            self._zone_name_label.setVisible(True)
+            self._zone_name_edit.setVisible(True)
             if not self._zones:
                 self._new_zone()
             self._refresh_zone_lists(select_index=0)
@@ -879,7 +903,10 @@ class TemplateBuilderScreen(QWidget):
 
     def _new_zone(self) -> None:
         self._editing_zone_index = None
-        self._zone_name_edit.setText(f"Zone {len(self._zones) + 1}")
+        if self._single_zone_rb.isChecked():
+            self._zone_name_edit.setText("Zone unique")
+        else:
+            self._zone_name_edit.setText(f"Zone {len(self._zones) + 1}")
         self._row_start_spin.setValue(1)
         self._row_end_spin.setValue(1)
         self._row_end_auto.setChecked(True)
@@ -932,9 +959,11 @@ class TemplateBuilderScreen(QWidget):
 
     def _collect_zone_form(self) -> dict[str, Any] | None:
         name = self._zone_name_edit.text().strip()
-        if not name:
+        if not name and not (hasattr(self, "_single_zone_rb") and self._single_zone_rb.isChecked()):
             QMessageBox.warning(self, "Attention", "Nom de zone requis.")
             return None
+        if not name:
+            name = "Zone unique"
         row_start = self._row_start_spin.value()
         row_end = None if self._row_end_auto.isChecked() else self._row_end_spin.value()
         col_start = self._col_start_spin.value()
@@ -1088,6 +1117,17 @@ class TemplateBuilderScreen(QWidget):
             mode_combo.addItems(["ignore", "simple", "concat"])
             mapping = mapping_by_col.get(col_index)
             mode = mapping.get("mode", "ignore") if mapping else "ignore"
+            default_source = ""
+            if not mapping:
+                if label and label in source_cols:
+                    mode = "simple"
+                    default_source = label
+                    data = {
+                        "col_index": col_index,
+                        "mode": "simple",
+                        "source_col": label,
+                    }
+                    self._set_mapping(zone, col_index, data)
             mode_combo.setCurrentText(mode)
             mode_combo.currentTextChanged.connect(lambda text, r=row_idx: self._on_mode_changed(r, text))
             self._mapping_table.setCellWidget(row_idx, 2, mode_combo)
@@ -1096,6 +1136,8 @@ class TemplateBuilderScreen(QWidget):
             source_combo.addItems([""] + source_cols)
             if mapping and mapping.get("source_col"):
                 source_combo.setCurrentText(mapping.get("source_col"))
+            elif default_source:
+                source_combo.setCurrentText(default_source)
             source_combo.currentTextChanged.connect(lambda text, r=row_idx: self._on_source_changed(r, text))
             self._mapping_table.setCellWidget(row_idx, 3, source_combo)
 
@@ -1300,6 +1342,10 @@ class TemplateBuilderScreen(QWidget):
         self._out_xlsx_edit.setText("")
         if hasattr(self, "_single_zone_rb"):
             self._single_zone_rb.setChecked(True)
+        if hasattr(self, "_mapping_zone_panel"):
+            self._mapping_zone_panel.setVisible(False)
+        if hasattr(self, "_agg_zone_panel"):
+            self._agg_zone_panel.setVisible(False)
 
         self._template_table.model().set_dataframe(pd.DataFrame())
         self._source_table.model().set_dataframe(pd.DataFrame())
