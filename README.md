@@ -22,7 +22,18 @@ laconcorde-gui
 python -m laconcorde_gui
 ```
 
-Sous Windows, double-cliquez sur `laconcorde-gui.bat` (ou exécutez-le en ligne de commande). Le script active automatiquement un venv `.venv` s'il existe.
+Sous Windows, double-cliquez sur `laconcorde-gui.bat` (ou exécutez-le en ligne de commande). Le script crée un venv
+`.venv` s'il n'existe pas, installe les dépendances GUI, puis lance l'application. Il réinstalle automatiquement si
+les dépendances du projet ont changé.
+
+Sous macOS, double-cliquez sur `laconcorde-gui.command`. Le script crée un venv `.venv` s'il n'existe pas,
+installe les dépendances GUI, puis lance l'application. Il réinstalle automatiquement si les dépendances
+du projet ont changé.
+Si le fichier n'est pas exécutable, lancez une fois :
+
+```bash
+chmod +x laconcorde-gui.command
+```
 
 ### Workflow
 
@@ -41,6 +52,26 @@ python build_exe.py
 ```
 
 L'exécutable et les DLL seront dans `dist/laconcorde_gui/`. Copiez tout le dossier pour distribuer l'application. Aucune installation de Python ou de dépendances n'est requise sur la machine cible.
+
+### Installateur Windows (Setup .exe)
+
+Pré-requis : Inno Setup (ISCC) installé et disponible dans le PATH.
+
+```bash
+pip install -e ".[gui]" pyinstaller
+python build_windows_installer.py
+```
+
+L'installateur sera généré dans `dist/installer/` (par défaut `LaConcordeSetup.exe`).
+
+### Application macOS (.app)
+
+```bash
+pip install -e ".[gui]" pyinstaller
+python build_macos_app.py
+```
+
+L'application sera générée dans `dist/LaConcorde.app`.
 
 ### Limites
 

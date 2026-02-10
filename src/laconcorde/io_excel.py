@@ -147,6 +147,65 @@ def load_sheet(
             engine=read_engine,
             header=header_idx,
         )
+    return df  # type: ignore[return-value]
+    except Exception as e:
+        raise ExcelFileError(f"Erreur feuille '{sheet_name}' dans {path}: {e}") from e
+
+
+def load_sheet_raw(
+    filepath: str | Path,
+    sheet_name: str | None = None,
+) -> pd.DataFrame:
+    """
+    Charge une feuille sans en-têtes (toutes les cellules, index/colonnes numériques).
+
+    Formats supportés : .xlsx, .xls, .ods, .csv.
+    """
+    path = Path(filepath)
+    if not path.exists():
+        raise ExcelFileError(f"Fichier introuvable: {path}")
+
+    if _is_csv(path):
+        try:
+            return pd.read_csv(path, dtype=str, encoding="utf-8", header=None)
+        except UnicodeDecodeError:
+            try:
+                return pd.read_csv(path, dtype=str, encoding="latin-1", header=None)
+            except Exception as e:
+                raise ExcelFileError(f"Erreur CSV {path}: {e}") from e
+        except Exception as e:
+            raise ExcelFileError(f"Erreur CSV {path}: {e}") from e
+
+    try:
+        engine = _get_engine(path)
+        xl = pd.ExcelFile(path, engine=engine) if engine else pd.ExcelFile(path)
+    except ImportError as e:
+        ext = path.suffix.lower()
+        if ext == ".xls":
+            raise ExcelFileError(f"Format .xls requis: pip install xlrd") from e
+        if ext in (".ods", ".odt"):
+            raise ExcelFileError(f"Format ODS requis: pip install odfpy") from e
+        raise ExcelFileError(f"Impossible de lire {path}: {e}") from e
+    except Exception as e:
+        raise ExcelFileError(f"Impossible de lire le fichier {path}: {e}") from e
+
+    if sheet_name is None:
+        sheet_name = xl.sheet_names[0]  # type: ignore[assignment]
+    elif sheet_name not in xl.sheet_names:
+        sheets = [str(s) for s in xl.sheet_names]
+        raise ExcelFileError(
+            f"Feuille '{sheet_name}' introuvable dans {path}. Feuilles: {', '.join(sheets)}"
+        )
+
+    try:
+        read_engine = engine if engine else "openpyxl"
+        df = pd.read_excel(
+            xl,
+            sheet_name=sheet_name,
+            dtype=str,
+            engine=read_engine,
+            header=None,
+        )
         return df  # type: ignore[return-value]
     except Exception as e:
         raise ExcelFileError(f"Erreur feuille '{sheet_name}' dans {path}: {e}") from e
@@ -157,6 +216,8 @@ def save_xlsx(
     dataframes: dict[str, pd.DataFrame],
     *,
     preserve_order: bool = True,
+    header: bool = True,
+    index: bool = False,
 ) -> None:
     """
     Sauvegarde plusieurs DataFrames dans un fichier xlsx (une feuille par DataFrame).
@@ -170,7 +231,38 @@ def save_xlsx(
         for sheet_name, df in dataframes.items():
             # Nettoyer le nom de feuille (Excel limite à 31 caractères)
             safe_name = str(sheet_name)[:31]
-            df.to_excel(writer, sheet_name=safe_name, index=False)
+            df.to_excel(writer, sheet_name=safe_name, index=index, header=header)
+
+
+def save_spreadsheet(
+    filepath: str | Path,
+    dataframes: dict[str, pd.DataFrame],
+    *,
+    preserve_order: bool = True,
+    header: bool = True,
+    index: bool = False,
+) -> None:
+    """
+    Sauvegarde plusieurs DataFrames dans un fichier xlsx ou ods.
+
+    Args:
+        filepath: Chemin de sortie (.xlsx ou .ods).
+        dataframes: Dict {nom_feuille: DataFrame}.
+        preserve_order: Si True, utilise un OrderedDict (Python 3.7+ dict est ordonné).
+    """
+    path = Path(filepath)
+    suffix = path.suffix.lower()
+    if suffix == ".ods":
+        engine = "odf"
+    elif suffix == ".xlsx":
+        engine = "openpyxl"
+    else:
+        raise ExcelFileError(f"Format de sortie non supporté: {suffix}")
+
+    with pd.ExcelWriter(path, engine=engine) as writer:
+        for sheet_name, df in dataframes.items():
+            safe_name = str(sheet_name)[:31]
+            df.to_excel(writer, sheet_name=safe_name, index=index, header=header)
 
 
 def load_source_target(config: Config) -> tuple[pd.DataFrame, pd.DataFrame]:

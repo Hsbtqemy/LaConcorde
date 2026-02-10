@@ -17,6 +17,8 @@ Build a configurable "Template Builder" mode that:
 - Must be configurable, not tied to a single dataset.
 - Source data typically has an ID per row (but user wants an option for strict row-order alignment).
 - Must support concatenation (ordering, separator, per-field prefixes).
+- Concat: prefix must be configurable per aggregated source column.
+- Must allow defining a target zone/field that can receive multiple elements, with a user-chosen separator.
 - Export should keep the template’s title/header rows (do NOT drop them).
 - "Everything must be exportable" (all blocks).
 - Choice between "single sheet (stacked blocks)" and "multi-sheet (one per block)"; primary usage is single sheet.
@@ -54,6 +56,18 @@ Structure observed:
   - "after last header row" vs fixed row number
 - Which prefix row to use by default:
   - Row 5 (FR) or Row 6 (ES), or manual
+- Concatenation target zones:
+  - How to designate a field/zone as multi-value (per target column setting? per block?)
+  - Separator selection UI (per target field or per concat mapping)
+- Zone delimitation:
+  - Support both manual coordinates (row/col start/end) and visual selection
+- Header detection:
+  - Auto-detect is allowed, but without regex; rely on unique template terms / exact matches
+  - Manual override by row numbers remains available
+- Multi-line aggregation (optional per zone):
+  - Group by an ID column to aggregate multiple source rows
+  - Non-concat fields default to first non-empty value
+  - Concat fields may optionally deduplicate values (no duplicates) per field
 - Output formatting:
   - single sheet (stacked blocks) vs multi-sheet (one block per sheet) — both supported, default to single sheet
   - whether to add block_name column (currently not required)
@@ -71,3 +85,6 @@ Structure observed:
 - User clarified: keep template title/header rows in output; ignore was a misunderstanding.
 - Primary usage: single sheet with stacked blocks; multi-sheet still needed as option.
 
+
+## Terminology
+- Use term "Zone" (not "Bloc") in UI and config where possible.

@@ -32,6 +32,8 @@ class AppState:
 
     # Configuration (dict pour UI, avant validation)
     config_dict: dict[str, Any] = field(default_factory=dict)
+    # Configuration Template Builder
+    template_builder_config: dict[str, Any] = field(default_factory=dict)
 
     # Résultats du matching
     results: list[MatchResult] = field(default_factory=list)

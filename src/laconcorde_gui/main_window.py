@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from laconcorde_gui.controllers import PipelineController, SessionController
-from laconcorde_gui.screens import ExportScreen, ProjectScreen, RulesScreen, ValidationScreen
+from laconcorde_gui.screens import ExportScreen, ProjectScreen, RulesScreen, TemplateBuilderScreen, ValidationScreen
 from laconcorde_gui.state import AppState
 from laconcorde_gui.workers import ExportWorker, MatchingWorker
 
@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
     SCREEN_RULES = 1
     SCREEN_VALIDATION = 2
     SCREEN_EXPORT = 3
+    SCREEN_TEMPLATE = 4
 
     def __init__(self) -> None:
         super().__init__()
@@ -57,10 +58,13 @@ class MainWindow(QMainWindow):
         btn_valid.clicked.connect(lambda: self._go_to(self.SCREEN_VALIDATION))
         btn_export = QPushButton("4. Export")
         btn_export.clicked.connect(lambda: self._go_to(self.SCREEN_EXPORT))
+        btn_template = QPushButton("Template Builder")
+        btn_template.clicked.connect(lambda: self._go_to(self.SCREEN_TEMPLATE))
         nav.addWidget(btn_proj)
         nav.addWidget(btn_rules)
         nav.addWidget(btn_valid)
         nav.addWidget(btn_export)
+        nav.addWidget(btn_template)
         nav.addStretch()
         layout.addLayout(nav)
 
@@ -71,11 +75,13 @@ class MainWindow(QMainWindow):
             self._state, on_finalize_requested=self._on_validation_finalized
         )
         self._export_screen = ExportScreen(self._state, on_export_requested=self._run_export)
+        self._template_builder_screen = TemplateBuilderScreen(self._state)
 
         self._stack.addWidget(self._project_screen)
         self._stack.addWidget(self._rules_screen)
         self._stack.addWidget(self._validation_screen)
         self._stack.addWidget(self._export_screen)
+        self._stack.addWidget(self._template_builder_screen)
 
         layout.addWidget(self._stack)
         self.setCentralWidget(central)
@@ -90,6 +96,8 @@ class MainWindow(QMainWindow):
             self._rules_screen.refresh_from_state()
         elif index == self.SCREEN_VALIDATION and self._state.results:
             self._validation_screen.refresh_data()
+        elif index == self.SCREEN_TEMPLATE:
+            self._template_builder_screen.refresh_from_state()
         self._stack.setCurrentIndex(index)
 
     def _run_matching(self) -> None:
