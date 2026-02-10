@@ -73,6 +73,18 @@ python build_macos_app.py
 
 L'application sera générée dans `dist/LaConcorde.app`.
 
+### DMG macOS (installation simple)
+
+Pré-requis : `create-dmg` (via Homebrew).
+
+```bash
+brew install create-dmg
+python build_macos_app.py
+./build_macos_dmg.sh
+```
+
+Le DMG sera généré dans `dist/LaConcorde.dmg`.
+
 ### Limites
 
 - Le bouton **Annuler** pendant le matching est best-effort : le moteur `Linker.run()` est synchrone et non interruptible. Si l'annulation est demandée avant la fin, les résultats sont ignorés et un message s'affiche.
