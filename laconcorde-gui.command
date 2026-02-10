@@ -1,6 +1,6 @@
 #!/bin/bash
 # Lance LaConcorde GUI (macOS)
-# Cree un venv .venv si absent, puis installe les dependances GUI.
+# Cree un venv .venv si absent, puis installe les dependances GUI + formats.
 
 set -u
 
@@ -49,7 +49,7 @@ if [ ! -d ".venv" ]; then
   source ".venv/bin/activate"
   echo "Installation des dependances..."
   python -m pip install --upgrade pip
-  python -m pip install -e ".[gui]"
+  python -m pip install -e ".[gui,formats]"
   if [ $? -ne 0 ]; then
     echo "Echec d'installation des dependances."
     read -n 1 -s -r -p "Appuyez sur une touche pour fermer..."
@@ -68,7 +68,7 @@ else
     CURRENT_HASH="$(compute_hash)"
     if [ ! -f "$HASH_FILE" ] || [ "$(cat "$HASH_FILE")" != "$CURRENT_HASH" ]; then
       echo "Mise a jour des dependances..."
-      python -m pip install -e ".[gui]"
+      python -m pip install -e ".[gui,formats]"
       if [ $? -ne 0 ]; then
         echo "Echec d'installation des dependances."
         read -n 1 -s -r -p "Appuyez sur une touche pour fermer..."
@@ -84,8 +84,8 @@ python -m laconcorde_gui "$@"
 status=$?
 if [ $status -ne 0 ]; then
   echo
-  echo "Si la GUI ne se lance pas, verifiez que PySide6 est installe:"
-  echo "  pip install -e \".[gui]\""
+  echo "Si la GUI ne se lance pas, verifiez que PySide6/odfpy/xlrd sont installes:"
+  echo "  pip install -e \".[gui,formats]\""
   read -n 1 -s -r -p "Appuyez sur une touche pour fermer..."
   echo
 fi

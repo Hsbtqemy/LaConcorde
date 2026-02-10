@@ -23,11 +23,11 @@ python -m laconcorde_gui
 ```
 
 Sous Windows, double-cliquez sur `laconcorde-gui.bat` (ou exécutez-le en ligne de commande). Le script crée un venv
-`.venv` s'il n'existe pas, installe les dépendances GUI, puis lance l'application. Il réinstalle automatiquement si
+`.venv` s'il n'existe pas, installe les dépendances GUI + formats, puis lance l'application. Il réinstalle automatiquement si
 les dépendances du projet ont changé.
 
 Sous macOS, double-cliquez sur `laconcorde-gui.command`. Le script crée un venv `.venv` s'il n'existe pas,
-installe les dépendances GUI, puis lance l'application. Il réinstalle automatiquement si les dépendances
+installe les dépendances GUI + formats, puis lance l'application. Il réinstalle automatiquement si les dépendances
 du projet ont changé.
 Si le fichier n'est pas exécutable, lancez une fois :
 

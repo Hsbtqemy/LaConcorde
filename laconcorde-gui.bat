@@ -1,6 +1,6 @@
 @echo off
 REM Lance LaConcorde GUI (Windows)
-REM Cree un venv .venv si absent, puis installe les dependances GUI.
+REM Cree un venv .venv si absent, puis installe les dependances GUI + formats.
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
@@ -30,7 +30,7 @@ if not exist ".venv" (
     call .venv\Scripts\activate.bat
     echo Installation des dependances...
     python -m pip install --upgrade pip
-    python -m pip install -e ".[gui]"
+    python -m pip install -e ".[gui,formats]"
     if errorlevel 1 (
         echo Echec d'installation des dependances.
         pause
@@ -56,7 +56,7 @@ if not exist ".venv" (
     )
     if "!NEEDS_UPDATE!"=="1" (
         echo Mise a jour des dependances...
-        python -m pip install -e ".[gui]"
+        python -m pip install -e ".[gui,formats]"
         if errorlevel 1 (
             echo Echec d'installation des dependances.
             pause
@@ -69,8 +69,8 @@ if not exist ".venv" (
 python -m laconcorde_gui %*
 if errorlevel 1 (
     echo.
-    echo Si la GUI ne se lance pas, verifiez que PySide6 est installe:
-    echo   pip install -e ".[gui]"
+    echo Si la GUI ne se lance pas, verifiez que PySide6/odfpy/xlrd sont installes:
+    echo   pip install -e ".[gui,formats]"
     pause
 )
 
