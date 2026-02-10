@@ -3,7 +3,7 @@
 Script de build pour créer un exécutable Windows autonome (LaConcorde GUI).
 
 Usage:
-    pip install -e ".[gui]" pyinstaller
+    pip install -e ".[gui,formats]" pyinstaller
     python build_exe.py
 
 Le .exe et les DLL seront dans dist/laconcorde_gui/

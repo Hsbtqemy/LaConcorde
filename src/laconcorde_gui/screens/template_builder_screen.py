@@ -6,7 +6,7 @@ import json
 import pandas as pd
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -23,17 +23,21 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QTableView,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from laconcorde.io_excel import SUPPORTED_INPUT_FILTER, list_sheets, load_sheet, load_sheet_raw
-from laconcorde.template_builder import TemplateBuilderConfig, build_output
+from laconcorde.template_builder import (
+    TemplateBuilderConfig,
+    ZoneSpec,
+    _build_zone_output,
+    build_output,
+)
 from laconcorde_gui.models import DataFrameModel
 from laconcorde_gui.workers import TemplateBuilderWorker
 
@@ -56,6 +60,8 @@ def _format_int_list(values: list[int]) -> str:
 
 
 class _ConcatSourceWidget(QWidget):
+    changed = Signal()
+
     def __init__(self, source_cols: list[str], col: str = "", prefix: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
@@ -66,6 +72,8 @@ class _ConcatSourceWidget(QWidget):
         self._prefix_edit.setPlaceholderText("Préfixe (optionnel)")
         layout.addWidget(self._col_combo, 2)
         layout.addWidget(self._prefix_edit, 3)
+        self._col_combo.currentTextChanged.connect(self.changed.emit)
+        self._prefix_edit.editingFinished.connect(self.changed.emit)
         self.refresh_source_cols(source_cols, current=col)
         if prefix:
             self._prefix_edit.setText(prefix)
@@ -222,6 +230,7 @@ class TemplateBuilderScreen(QWidget):
         self._editing_zone_index: int | None = None
         self._current_mapping_cols: list[int] = []
         self._current_mapping_labels: list[str] = []
+        self._mapping_concat_loading = False
         self._worker: TemplateBuilderWorker | None = None
         self._preview_frames: dict[str, Any] = {}
         self._preview_cache_key: str | None = None
@@ -515,7 +524,10 @@ class TemplateBuilderScreen(QWidget):
 
     def _build_mapping_page(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
+        outer = QVBoxLayout(page)
+
+        top_row = QHBoxLayout()
+        outer.addLayout(top_row, 3)
 
         left = QVBoxLayout()
         self._mapping_zone_list = QListWidget()
@@ -525,19 +537,152 @@ class TemplateBuilderScreen(QWidget):
         left.addStretch()
         self._mapping_zone_panel = QWidget()
         self._mapping_zone_panel.setLayout(left)
+        top_row.addWidget(self._mapping_zone_panel, 1)
 
-        right = QVBoxLayout()
-        self._mapping_table = QTableWidget()
-        self._mapping_table.setColumnCount(6)
-        self._mapping_table.setHorizontalHeaderLabels(
-            ["Col", "Label", "Mode", "Source", "Concat", "Résumé"]
+        mapping_row = QHBoxLayout()
+        top_row.addLayout(mapping_row, 4)
+
+        source_group = QGroupBox("Colonnes source")
+        source_layout = QVBoxLayout()
+        self._mapping_source_list = QListWidget()
+        self._mapping_source_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        source_layout.addWidget(self._mapping_source_list)
+        source_group.setLayout(source_layout)
+        mapping_row.addWidget(source_group, 2)
+
+        target_group = QGroupBox("Champs cible (template)")
+        target_layout = QVBoxLayout()
+
+        self._mapping_target_list = QListWidget()
+        self._mapping_target_list.currentRowChanged.connect(self._on_mapping_target_selected)
+        self._mapping_target_list.setMinimumHeight(300)
+        self._mapping_target_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        target_layout.addWidget(self._mapping_target_list, 1)
+        target_group.setLayout(target_layout)
+        mapping_row.addWidget(target_group, 3)
+
+        detail_group = QGroupBox("Détails")
+        detail_layout = QVBoxLayout()
+
+        header_row = QHBoxLayout()
+        header_row.addWidget(QLabel("Cible:"))
+        self._mapping_target_label = QLabel("—")
+        self._mapping_target_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        header_row.addWidget(self._mapping_target_label, 1)
+        self._mapping_mode_badge = QLabel("—")
+        self._mapping_mode_badge.setObjectName("mappingModeBadge")
+        self._mapping_mode_badge.setStyleSheet(
+            "QLabel#mappingModeBadge {"
+            "background: #eef2f7;"
+            "color: #394150;"
+            "border: 1px solid #d5dbe3;"
+            "border-radius: 8px;"
+            "padding: 2px 8px;"
+            "font-size: 11px;"
+            "}"
         )
-        self._mapping_table.horizontalHeader().setStretchLastSection(True)
-        right.addWidget(self._mapping_table)
-        right.addStretch()
+        header_row.addWidget(self._mapping_mode_badge)
+        detail_layout.addLayout(header_row)
 
-        layout.addWidget(self._mapping_zone_panel, 1)
-        layout.addLayout(right, 3)
+        self._mapping_detail_hint = QLabel("Sélectionnez un champ cible pour configurer le mapping.")
+        self._mapping_detail_hint.setWordWrap(True)
+        detail_layout.addWidget(self._mapping_detail_hint)
+
+        actions_row = QHBoxLayout()
+        self._map_simple_btn = QPushButton("Associer simple →")
+        self._map_simple_btn.clicked.connect(self._map_simple_current)
+        self._map_concat_btn = QPushButton("Associer concat →")
+        self._map_concat_btn.clicked.connect(self._map_concat_current)
+        self._unmap_btn = QPushButton("Retirer mapping")
+        self._unmap_btn.clicked.connect(self._remove_mapping_current)
+        actions_row.addWidget(self._map_simple_btn)
+        actions_row.addWidget(self._map_concat_btn)
+        actions_row.addWidget(self._unmap_btn)
+        actions_row.addStretch()
+        detail_layout.addLayout(actions_row)
+
+        self._mapping_simple_panel = QWidget()
+        simple_form = QFormLayout()
+        self._mapping_simple_combo = QComboBox()
+        self._mapping_simple_combo.currentTextChanged.connect(self._on_simple_source_changed)
+        simple_form.addRow("Source:", self._mapping_simple_combo)
+        self._mapping_simple_panel.setLayout(simple_form)
+        detail_layout.addWidget(self._mapping_simple_panel)
+
+        self._mapping_concat_panel = QWidget()
+        concat_layout = QVBoxLayout()
+        concat_form = QFormLayout()
+        self._concat_sep_edit = QLineEdit("; ")
+        self._concat_sep_edit.editingFinished.connect(self._on_concat_changed)
+        self._concat_skip_empty_cb = QCheckBox("Ignorer vides")
+        self._concat_skip_empty_cb.setChecked(True)
+        self._concat_skip_empty_cb.stateChanged.connect(lambda _: self._on_concat_changed())
+        self._concat_dedupe_cb = QCheckBox("Dédupliquer les valeurs")
+        self._concat_dedupe_cb.stateChanged.connect(lambda _: self._on_concat_changed())
+        concat_form.addRow("Séparateur:", self._concat_sep_edit)
+        concat_form.addRow("", self._concat_skip_empty_cb)
+        concat_form.addRow("", self._concat_dedupe_cb)
+        concat_layout.addLayout(concat_form)
+
+        concat_layout.addWidget(QLabel("Colonnes concaténées (ordre)"))
+        self._concat_sources_list = QListWidget()
+        self._concat_sources_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._concat_sources_list.setMinimumHeight(220)
+        self._concat_sources_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        concat_layout.addWidget(self._concat_sources_list, 1)
+
+        concat_btns = QHBoxLayout()
+        self._concat_add_btn = QPushButton("Ajouter colonne")
+        self._concat_add_btn.clicked.connect(self._add_concat_source)
+        self._concat_remove_btn = QPushButton("Supprimer")
+        self._concat_remove_btn.clicked.connect(self._remove_concat_source)
+        self._concat_up_btn = QPushButton("↑")
+        self._concat_up_btn.clicked.connect(lambda: self._move_concat_source(-1))
+        self._concat_down_btn = QPushButton("↓")
+        self._concat_down_btn.clicked.connect(lambda: self._move_concat_source(1))
+        concat_btns.addWidget(self._concat_add_btn)
+        concat_btns.addWidget(self._concat_remove_btn)
+        concat_btns.addStretch()
+        concat_btns.addWidget(self._concat_up_btn)
+        concat_btns.addWidget(self._concat_down_btn)
+        concat_layout.addLayout(concat_btns)
+
+        self._mapping_concat_panel.setLayout(concat_layout)
+        self._mapping_concat_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        detail_layout.addWidget(self._mapping_concat_panel)
+        detail_layout.addStretch()
+        detail_group.setLayout(detail_layout)
+        detail_group.setMinimumHeight(320)
+        mapping_row.addWidget(detail_group, 4)
+
+        preview_group = QGroupBox("Prévisualisation (zone courante)")
+        preview_layout = QVBoxLayout()
+        preview_controls = QHBoxLayout()
+        preview_controls.addWidget(QLabel("Lignes de données:"))
+        self._mapping_preview_rows_spin = QSpinBox()
+        self._mapping_preview_rows_spin.setRange(1, 1000000)
+        self._mapping_preview_rows_spin.setValue(5)
+        self._mapping_preview_rows_spin.valueChanged.connect(lambda _: self._refresh_mapping_preview())
+        preview_controls.addWidget(self._mapping_preview_rows_spin)
+        self._mapping_preview_refresh_btn = QPushButton("Rafraîchir")
+        self._mapping_preview_refresh_btn.clicked.connect(self._refresh_mapping_preview)
+        preview_controls.addWidget(self._mapping_preview_refresh_btn)
+        preview_controls.addStretch()
+        preview_layout.addLayout(preview_controls)
+        self._mapping_preview_label = QLabel("")
+        preview_layout.addWidget(self._mapping_preview_label)
+        self._mapping_preview_table = QTableView()
+        self._mapping_preview_table.setModel(DataFrameModel())
+        self._mapping_preview_table.horizontalHeader().setStretchLastSection(True)
+        preview_layout.addWidget(self._mapping_preview_table)
+        preview_group.setLayout(preview_layout)
+        outer.addWidget(preview_group, 2)
+
+        self._mapping_simple_panel.setVisible(False)
+        self._mapping_concat_panel.setVisible(False)
+
         return page
 
     def _build_aggregation_page(self) -> QWidget:
@@ -693,10 +838,23 @@ class TemplateBuilderScreen(QWidget):
                 self._load_previews()
             return True
         if idx == 1:
-            if not self._zones:
-                QMessageBox.warning(self, "Attention", "Définissez au moins une zone.")
+            zone = self._collect_zone_form()
+            if zone is None:
                 return False
-            self._refresh_zone_lists()
+            if hasattr(self, "_single_zone_rb") and self._single_zone_rb.isChecked():
+                if self._zones:
+                    self._zones[0] = zone
+                else:
+                    self._zones.append(zone)
+                self._editing_zone_index = 0
+            else:
+                if self._editing_zone_index is None:
+                    self._zones.append(zone)
+                    self._editing_zone_index = len(self._zones) - 1
+                else:
+                    self._zones[self._editing_zone_index] = zone
+            self._invalidate_preview_cache()
+            self._refresh_zone_lists(select_index=self._editing_zone_index)
         return True
 
     def _browse_template(self) -> None:
@@ -754,6 +912,11 @@ class TemplateBuilderScreen(QWidget):
 
             self._agg_group_by.clear()
             self._agg_group_by.addItems(list(self._source_df.columns))
+
+            if hasattr(self, "_mapping_source_list"):
+                self._refresh_mapping_sources(list(self._source_df.columns))
+                if self._mapping_zone_list.currentRow() >= 0:
+                    self._load_zone_mapping(self._mapping_zone_list.currentRow())
         except Exception as e:
             QMessageBox.critical(self, "Erreur", str(e))
 
@@ -974,7 +1137,9 @@ class TemplateBuilderScreen(QWidget):
         tech_row = self._tech_row_spin.value()
         prefix_row = self._prefix_row_spin.value() if self._prefix_row_cb.isChecked() else None
         data_start = None if self._data_start_auto.isChecked() else self._data_start_spin.value()
-        existing = self._zones[self._editing_zone_index] if self._editing_zone_index is not None else {}
+        existing = {}
+        if self._editing_zone_index is not None and 0 <= self._editing_zone_index < len(self._zones):
+            existing = self._zones[self._editing_zone_index]
         aggregate = bool(existing.get("aggregate", False))
         group_by = existing.get("group_by")
         return {
@@ -1098,95 +1263,402 @@ class TemplateBuilderScreen(QWidget):
         QMessageBox.information(self, "Info", "Aucun terme trouvé dans la zone.")
 
     def _load_zone_mapping(self, idx: int) -> None:
+        self._current_mapping_cols = []
+        self._current_mapping_labels = []
+        if hasattr(self, "_mapping_target_list"):
+            self._mapping_target_list.blockSignals(True)
+            self._mapping_target_list.clear()
+            self._mapping_target_list.blockSignals(False)
         if idx < 0 or idx >= len(self._zones):
-            self._mapping_table.setRowCount(0)
+            self._clear_mapping_detail()
+            self._refresh_mapping_preview()
             return
+
         zone = self._zones[idx]
         targets = self._get_zone_target_columns(zone)
         self._current_mapping_cols = [t["col_index"] for t in targets]
         self._current_mapping_labels = [t["label"] for t in targets]
-        self._mapping_table.setRowCount(len(targets))
-        source_cols = list(self._source_df.columns) if self._source_df is not None else []
-        mapping_by_col = {m.get("col_index"): m for m in zone.get("field_mappings", [])}
-        mapping_by_target = {m.get("target"): m for m in zone.get("field_mappings", []) if m.get("target")}
 
-        for row_idx, target in enumerate(targets):
-            col_index = target["col_index"]
+        source_cols = self._get_source_cols()
+        self._refresh_mapping_sources(source_cols)
+
+        auto_mapped = False
+        for target in targets:
             label = target["label"]
-            self._mapping_table.setItem(row_idx, 0, QTableWidgetItem(str(col_index + 1)))
-            self._mapping_table.setItem(row_idx, 1, QTableWidgetItem(label))
+            col_index = target["col_index"]
+            if label and label in source_cols and not self._get_mapping(zone, label, col_index):
+                data = {
+                    "col_index": col_index,
+                    "target": label,
+                    "mode": "simple",
+                    "source_col": label,
+                }
+                self._set_mapping(zone, label, col_index, data)
+                auto_mapped = True
 
-            mode_combo = QComboBox()
-            mode_combo.addItems(["ignore", "simple", "concat"])
-            mapping = mapping_by_target.get(label) or mapping_by_col.get(col_index)
-            mode = mapping.get("mode", "ignore") if mapping else "ignore"
-            default_source = ""
-            if not mapping:
-                if label and label in source_cols:
-                    mode = "simple"
-                    default_source = label
-                    data = {
-                        "col_index": col_index,
-                        "target": label,
-                        "mode": "simple",
-                        "source_col": label,
-                    }
-                    self._set_mapping(zone, label, col_index, data)
-            mode_combo.setCurrentText(mode)
-            mode_combo.currentTextChanged.connect(lambda text, r=row_idx: self._on_mode_changed(r, text))
-            self._mapping_table.setCellWidget(row_idx, 2, mode_combo)
+        if hasattr(self, "_mapping_target_list"):
+            self._mapping_target_list.blockSignals(True)
+            for target in targets:
+                label = target["label"]
+                col_index = target["col_index"]
+                mapping = self._get_mapping(zone, label, col_index)
+                item = QListWidgetItem(self._format_target_display(label, mapping))
+                self._mapping_target_list.addItem(item)
+            self._mapping_target_list.blockSignals(False)
 
-            source_combo = QComboBox()
-            source_combo.addItems([""] + source_cols)
-            if mapping and mapping.get("source_col"):
-                source_combo.setCurrentText(mapping.get("source_col"))
-            elif default_source:
-                source_combo.setCurrentText(default_source)
-            source_combo.currentTextChanged.connect(lambda text, r=row_idx: self._on_source_changed(r, text))
-            self._mapping_table.setCellWidget(row_idx, 3, source_combo)
+            if targets:
+                self._mapping_target_list.setCurrentRow(0)
+            else:
+                self._clear_mapping_detail()
 
-            concat_btn = QPushButton("Éditer")
-            concat_btn.clicked.connect(lambda _=None, r=row_idx: self._edit_concat(r))
-            self._mapping_table.setCellWidget(row_idx, 4, concat_btn)
+        if auto_mapped:
+            self._invalidate_preview_cache()
+        self._refresh_mapping_preview()
 
-            summary = QTableWidgetItem(self._format_concat_summary(mapping.get("concat")) if mapping else "")
-            self._mapping_table.setItem(row_idx, 5, summary)
+    def _get_source_cols(self) -> list[str]:
+        return list(self._source_df.columns) if self._source_df is not None else []
 
-            self._apply_mapping_row_state(row_idx, mode)
+    def _refresh_mapping_sources(self, source_cols: list[str]) -> None:
+        if hasattr(self, "_mapping_source_list"):
+            self._mapping_source_list.blockSignals(True)
+            self._mapping_source_list.clear()
+            self._mapping_source_list.addItems(source_cols)
+            self._mapping_source_list.blockSignals(False)
 
-        self._mapping_table.resizeColumnsToContents()
+        if hasattr(self, "_mapping_simple_combo"):
+            self._mapping_simple_combo.blockSignals(True)
+            self._mapping_simple_combo.clear()
+            self._mapping_simple_combo.addItems([""] + source_cols)
+            self._mapping_simple_combo.blockSignals(False)
 
-    def _apply_mapping_row_state(self, row_idx: int, mode: str) -> None:
-        source_widget = self._mapping_table.cellWidget(row_idx, 3)
-        concat_widget = self._mapping_table.cellWidget(row_idx, 4)
-        if source_widget:
-            source_widget.setEnabled(mode == "simple")
-        if concat_widget:
-            concat_widget.setEnabled(mode == "concat")
+        self._refresh_concat_source_widgets(source_cols)
 
-    def _on_mode_changed(self, row_idx: int, mode: str) -> None:
-        self._apply_mapping_row_state(row_idx, mode)
-        self._update_mapping_from_row(row_idx, mode_override=mode)
+    def _refresh_concat_source_widgets(self, source_cols: list[str]) -> None:
+        if not hasattr(self, "_concat_sources_list"):
+            return
+        for i in range(self._concat_sources_list.count()):
+            item = self._concat_sources_list.item(i)
+            widget = self._concat_sources_list.itemWidget(item)
+            if isinstance(widget, _ConcatSourceWidget):
+                widget.refresh_source_cols(source_cols)
 
-    def _on_source_changed(self, row_idx: int, source_col: str) -> None:
-        self._update_mapping_from_row(row_idx, source_override=source_col)
+    def _format_target_display(self, label: str, mapping: dict[str, Any] | None) -> str:
+        base = label or "(sans label)"
+        if not mapping or mapping.get("mode") == "ignore":
+            return base
+        mode = mapping.get("mode")
+        if mode == "simple":
+            src = mapping.get("source_col") or ""
+            return f"{base} ← {src}" if src else f"{base} ← (vide)"
+        if mode == "concat":
+            summary = self._format_concat_summary(mapping.get("concat"))
+            return f"{base} ← {summary}" if summary else f"{base} ← concat"
+        return base
 
-    def _edit_concat(self, row_idx: int) -> None:
+    def _update_target_item(self, row_idx: int) -> None:
+        if not hasattr(self, "_mapping_target_list"):
+            return
+        item = self._mapping_target_list.item(row_idx)
+        if item is None:
+            return
         zone = self._current_zone_for_mapping()
         if zone is None:
             return
-        col_index = self._current_mapping_cols[row_idx]
         label = self._current_mapping_labels[row_idx]
+        col_index = self._current_mapping_cols[row_idx]
         mapping = self._get_mapping(zone, label, col_index)
-        preset = mapping.get("concat") if mapping else None
-        source_cols = list(self._source_df.columns) if self._source_df is not None else []
-        dlg = _ConcatDialog(source_cols, preset=preset, parent=self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            concat_data = dlg.get_data()
-            if not concat_data.get("sources"):
-                QMessageBox.warning(self, "Attention", "Ajoutez au moins une colonne source.")
-                return
-            self._update_mapping_from_row(row_idx, mode_override="concat", concat_override=concat_data)
+        item.setText(self._format_target_display(label, mapping))
+
+    def _clear_mapping_detail(self, message: str | None = None) -> None:
+        if not hasattr(self, "_mapping_target_label"):
+            return
+        self._mapping_target_label.setText("—")
+        self._mapping_mode_badge.setText("—")
+        self._mapping_detail_hint.setText(
+            message or "Sélectionnez un champ cible pour configurer le mapping."
+        )
+        self._mapping_detail_hint.setVisible(True)
+        self._mapping_simple_panel.setVisible(False)
+        self._mapping_concat_panel.setVisible(False)
+
+    def _set_mapping_mode_badge(self, mode: str) -> None:
+        labels = {"ignore": "Ignorer", "simple": "Simple", "concat": "Concat"}
+        self._mapping_mode_badge.setText(labels.get(mode, "—"))
+
+    def _current_mapping_target(self) -> tuple[dict[str, Any], int, str, int] | None:
+        zone = self._current_zone_for_mapping()
+        if zone is None or not hasattr(self, "_mapping_target_list"):
+            return None
+        row = self._mapping_target_list.currentRow()
+        if row < 0 or row >= len(self._current_mapping_cols):
+            return None
+        label = self._current_mapping_labels[row]
+        col_index = self._current_mapping_cols[row]
+        return zone, row, label, col_index
+
+    def _on_mapping_target_selected(self, row_idx: int) -> None:
+        info = self._current_mapping_target()
+        if info is None:
+            self._clear_mapping_detail()
+            return
+        zone, row_idx, label, col_index = info
+        mapping = self._get_mapping(zone, label, col_index)
+        mode = mapping.get("mode") if mapping else "ignore"
+        self._mapping_target_label.setText(label or "(sans label)")
+        self._set_mapping_mode_badge(mode)
+        if mode == "simple":
+            self._mapping_detail_hint.setVisible(False)
+            self._mapping_simple_panel.setVisible(True)
+            self._mapping_concat_panel.setVisible(False)
+            self._mapping_simple_combo.blockSignals(True)
+            self._mapping_simple_combo.setCurrentText(mapping.get("source_col") if mapping else "")
+            self._mapping_simple_combo.blockSignals(False)
+        elif mode == "concat":
+            self._mapping_detail_hint.setVisible(False)
+            self._mapping_simple_panel.setVisible(False)
+            self._mapping_concat_panel.setVisible(True)
+            self._load_concat_editor(mapping.get("concat") if mapping else None)
+        else:
+            self._mapping_detail_hint.setText("Aucune association (ignore).")
+            self._mapping_detail_hint.setVisible(True)
+            self._mapping_simple_panel.setVisible(False)
+            self._mapping_concat_panel.setVisible(False)
+
+    def _get_primary_source_column(self) -> str:
+        if not hasattr(self, "_mapping_source_list"):
+            return ""
+        current = self._mapping_source_list.currentItem()
+        if current is not None:
+            return current.text()
+        items = self._mapping_source_list.selectedItems()
+        if items:
+            return items[0].text()
+        return ""
+
+    def _selected_source_columns(self) -> list[str]:
+        if not hasattr(self, "_mapping_source_list"):
+            return []
+        return [item.text() for item in self._mapping_source_list.selectedItems()]
+
+    def _map_simple_current(self) -> None:
+        info = self._current_mapping_target()
+        if info is None:
+            QMessageBox.warning(self, "Attention", "Sélectionnez un champ cible.")
+            return
+        source_col = self._get_primary_source_column()
+        if not source_col:
+            QMessageBox.warning(self, "Attention", "Sélectionnez une colonne source.")
+            return
+        zone, row_idx, label, col_index = info
+        data = {
+            "col_index": col_index,
+            "target": label,
+            "mode": "simple",
+            "source_col": source_col,
+        }
+        self._set_mapping(zone, label, col_index, data)
+        self._update_target_item(row_idx)
+        self._mapping_target_list.setCurrentRow(row_idx)
+        self._set_mapping_mode_badge("simple")
+        self._invalidate_preview_cache()
+        self._refresh_mapping_preview()
+
+    def _map_concat_current(self) -> None:
+        info = self._current_mapping_target()
+        if info is None:
+            QMessageBox.warning(self, "Attention", "Sélectionnez un champ cible.")
+            return
+        zone, row_idx, label, col_index = info
+        mapping = self._get_mapping(zone, label, col_index)
+        concat = mapping.get("concat") if mapping and mapping.get("mode") == "concat" else None
+        if concat is None:
+            concat = {
+                "separator": "; ",
+                "skip_empty": True,
+                "deduplicate": False,
+                "sources": [],
+            }
+        selected_sources = self._selected_source_columns()
+        if selected_sources:
+            existing = [src.get("col") for src in concat.get("sources", [])]
+            for src in selected_sources:
+                if src not in existing:
+                    concat.setdefault("sources", []).append({"col": src, "prefix": ""})
+        data = {
+            "col_index": col_index,
+            "target": label,
+            "mode": "concat",
+            "concat": concat,
+        }
+        self._set_mapping(zone, label, col_index, data)
+        self._update_target_item(row_idx)
+        self._mapping_target_list.setCurrentRow(row_idx)
+        self._set_mapping_mode_badge("concat")
+        self._invalidate_preview_cache()
+        self._refresh_mapping_preview()
+
+    def _remove_mapping_current(self) -> None:
+        info = self._current_mapping_target()
+        if info is None:
+            QMessageBox.warning(self, "Attention", "Sélectionnez un champ cible.")
+            return
+        zone, row_idx, label, col_index = info
+        self._remove_mapping(zone, label, col_index)
+        self._update_target_item(row_idx)
+        self._clear_mapping_detail("Aucune association (ignore).")
+        self._invalidate_preview_cache()
+        self._refresh_mapping_preview()
+
+    def _on_simple_source_changed(self, source_col: str) -> None:
+        info = self._current_mapping_target()
+        if info is None:
+            return
+        zone, row_idx, label, col_index = info
+        mapping = self._get_mapping(zone, label, col_index)
+        if not mapping or mapping.get("mode") != "simple":
+            return
+        data = {
+            "col_index": col_index,
+            "target": label,
+            "mode": "simple",
+            "source_col": source_col or "",
+        }
+        self._set_mapping(zone, label, col_index, data)
+        self._update_target_item(row_idx)
+        self._invalidate_preview_cache()
+        self._refresh_mapping_preview()
+
+    def _add_concat_source(self, col: str | None = None, prefix: str = "") -> None:
+        if not hasattr(self, "_concat_sources_list"):
+            return
+        source_cols = self._get_source_cols()
+        default_col = col if col is not None else self._get_primary_source_column()
+        widget = _ConcatSourceWidget(source_cols, col=default_col, prefix=prefix)
+        widget.changed.connect(self._on_concat_changed)
+        item = QListWidgetItem()
+        item.setSizeHint(widget.sizeHint())
+        self._concat_sources_list.addItem(item)
+        self._concat_sources_list.setItemWidget(item, widget)
+        self._concat_sources_list.setCurrentItem(item)
+        self._on_concat_changed()
+
+    def _remove_concat_source(self) -> None:
+        if not hasattr(self, "_concat_sources_list"):
+            return
+        row = self._concat_sources_list.currentRow()
+        if row < 0:
+            return
+        item = self._concat_sources_list.item(row)
+        widget = self._concat_sources_list.itemWidget(item) if item else None
+        self._concat_sources_list.takeItem(row)
+        if widget:
+            widget.deleteLater()
+        self._on_concat_changed()
+
+    def _move_concat_source(self, delta: int) -> None:
+        if not hasattr(self, "_concat_sources_list"):
+            return
+        row = self._concat_sources_list.currentRow()
+        if row < 0:
+            return
+        new_row = row + delta
+        if new_row < 0 or new_row >= self._concat_sources_list.count():
+            return
+        item = self._concat_sources_list.item(row)
+        widget = self._concat_sources_list.itemWidget(item) if item else None
+        self._concat_sources_list.takeItem(row)
+        if widget:
+            widget.setParent(None)
+        self._concat_sources_list.insertItem(new_row, item)
+        if widget:
+            self._concat_sources_list.setItemWidget(item, widget)
+        self._concat_sources_list.setCurrentRow(new_row)
+        self._on_concat_changed()
+
+    def _load_concat_editor(self, concat: dict[str, Any] | None) -> None:
+        if not hasattr(self, "_concat_sources_list"):
+            return
+        self._mapping_concat_loading = True
+        data = concat or {}
+        self._concat_sep_edit.setText(str(data.get("separator", "; ")))
+        self._concat_skip_empty_cb.setChecked(bool(data.get("skip_empty", True)))
+        self._concat_dedupe_cb.setChecked(bool(data.get("deduplicate", False)))
+        self._concat_sources_list.clear()
+        for src in data.get("sources", []):
+            self._add_concat_source(col=src.get("col", ""), prefix=src.get("prefix", ""))
+        self._mapping_concat_loading = False
+
+    def _collect_concat_editor_data(self) -> dict[str, Any]:
+        sources: list[dict[str, str]] = []
+        for i in range(self._concat_sources_list.count()):
+            item = self._concat_sources_list.item(i)
+            widget = self._concat_sources_list.itemWidget(item)
+            if isinstance(widget, _ConcatSourceWidget):
+                col, prefix = widget.get_data()
+                if col:
+                    sources.append({"col": col, "prefix": prefix})
+        return {
+            "separator": self._concat_sep_edit.text(),
+            "skip_empty": self._concat_skip_empty_cb.isChecked(),
+            "deduplicate": self._concat_dedupe_cb.isChecked(),
+            "sources": sources,
+        }
+
+    def _on_concat_changed(self) -> None:
+        if self._mapping_concat_loading:
+            return
+        info = self._current_mapping_target()
+        if info is None:
+            return
+        zone, row_idx, label, col_index = info
+        mapping = self._get_mapping(zone, label, col_index)
+        if not mapping or mapping.get("mode") != "concat":
+            return
+        concat = self._collect_concat_editor_data()
+        data = {
+            "col_index": col_index,
+            "target": label,
+            "mode": "concat",
+            "concat": concat,
+        }
+        self._set_mapping(zone, label, col_index, data)
+        self._update_target_item(row_idx)
+        self._invalidate_preview_cache()
+        self._refresh_mapping_preview()
+
+    def _build_zone_preview_frame(self, zone: dict[str, Any], max_rows: int) -> pd.DataFrame:
+        if self._template_df_raw is None or self._source_df is None:
+            return pd.DataFrame()
+        zone_spec = ZoneSpec.from_dict(zone)
+        source_df = self._source_df.head(max_rows)
+        return _build_zone_output(zone_spec, self._template_df_raw, source_df)
+
+    def _refresh_mapping_preview(self) -> None:
+        if not hasattr(self, "_mapping_preview_table"):
+            return
+        zone = self._current_zone_for_mapping()
+        if zone is None:
+            self._mapping_preview_table.model().set_dataframe(pd.DataFrame())
+            self._mapping_preview_label.setText("Prévisualisation indisponible.")
+            return
+        if self._template_df_raw is None or self._source_df is None:
+            self._mapping_preview_table.model().set_dataframe(pd.DataFrame())
+            self._mapping_preview_label.setText("Chargez un template et une source.")
+            return
+        max_rows = 5
+        if hasattr(self, "_mapping_preview_rows_spin"):
+            max_rows = self._mapping_preview_rows_spin.value()
+        try:
+            df = self._build_zone_preview_frame(zone, max_rows)
+        except Exception as e:
+            self._mapping_preview_table.model().set_dataframe(pd.DataFrame())
+            self._mapping_preview_label.setText(f"Erreur preview: {e}")
+            return
+        self._mapping_preview_table.model().set_dataframe(df)
+        name = (zone.get("name") or "").strip() or "Zone"
+        self._mapping_preview_label.setText(
+            f"{name}: {df.shape[0]} lignes × {df.shape[1]} colonnes"
+        )
 
     def _format_concat_summary(self, concat: dict[str, Any] | None) -> str:
         if not concat:
@@ -1199,58 +1671,6 @@ class TemplateBuilderScreen(QWidget):
                 continue
             parts.append(f"{prefix}{col}" if prefix else col)
         return " | ".join(parts)
-
-    def _update_mapping_from_row(
-        self,
-        row_idx: int,
-        *,
-        mode_override: str | None = None,
-        source_override: str | None = None,
-        concat_override: dict[str, Any] | None = None,
-    ) -> None:
-        zone = self._current_zone_for_mapping()
-        if zone is None:
-            return
-        col_index = self._current_mapping_cols[row_idx]
-        label = self._current_mapping_labels[row_idx]
-        mapping = self._get_mapping(zone, label, col_index)
-        mode = mode_override or (mapping.get("mode") if mapping else "ignore")
-        if mode == "ignore":
-            self._remove_mapping(zone, label, col_index)
-            self._invalidate_preview_cache()
-            self._mapping_table.setItem(row_idx, 5, QTableWidgetItem(""))
-            return
-
-        if mode == "simple":
-            source_col = source_override
-            if source_col is None:
-                source_widget = self._mapping_table.cellWidget(row_idx, 3)
-                if isinstance(source_widget, QComboBox):
-                    source_col = source_widget.currentText()
-            data = {
-                "col_index": col_index,
-                "target": label,
-                "mode": "simple",
-                "source_col": source_col or "",
-            }
-            self._set_mapping(zone, label, col_index, data)
-            self._invalidate_preview_cache()
-            self._mapping_table.setItem(row_idx, 5, QTableWidgetItem(""))
-            return
-
-        if mode == "concat":
-            concat = concat_override
-            if concat is None and mapping:
-                concat = mapping.get("concat")
-            data = {
-                "col_index": col_index,
-                "target": label,
-                "mode": "concat",
-                "concat": concat or {},
-            }
-            self._set_mapping(zone, label, col_index, data)
-            self._invalidate_preview_cache()
-            self._mapping_table.setItem(row_idx, 5, QTableWidgetItem(self._format_concat_summary(concat)))
 
     def _get_mapping(self, zone: dict[str, Any], target: str, col_index: int) -> dict[str, Any] | None:
         for m in zone.get("field_mappings", []):
@@ -1287,7 +1707,18 @@ class TemplateBuilderScreen(QWidget):
         zone["field_mappings"] = mappings
 
     def _current_zone_for_mapping(self) -> dict[str, Any] | None:
-        idx = self._mapping_zone_list.currentRow()
+        idx = -1
+        if hasattr(self, "_mapping_zone_list"):
+            idx = self._mapping_zone_list.currentRow()
+        if idx < 0 or idx >= len(self._zones):
+            if self._editing_zone_index is not None and 0 <= self._editing_zone_index < len(self._zones):
+                idx = self._editing_zone_index
+            elif hasattr(self, "_zones_list"):
+                fallback = self._zones_list.currentRow()
+                if 0 <= fallback < len(self._zones):
+                    idx = fallback
+            elif self._zones:
+                idx = 0
         if idx < 0 or idx >= len(self._zones):
             return None
         return self._zones[idx]
@@ -1314,6 +1745,8 @@ class TemplateBuilderScreen(QWidget):
 
     def _get_current_zone_mappings(self) -> list[dict[str, Any]]:
         if self._editing_zone_index is None:
+            return []
+        if self._editing_zone_index < 0 or self._editing_zone_index >= len(self._zones):
             return []
         return self._zones[self._editing_zone_index].get("field_mappings", [])
 
@@ -1373,7 +1806,17 @@ class TemplateBuilderScreen(QWidget):
         self._source_table.model().set_dataframe(pd.DataFrame())
         self._template_label.setText("Template: —")
         self._source_label.setText("Source: —")
-        self._mapping_table.setRowCount(0)
+        if hasattr(self, "_mapping_target_list"):
+            self._mapping_target_list.clear()
+        if hasattr(self, "_mapping_source_list"):
+            self._mapping_source_list.clear()
+        if hasattr(self, "_concat_sources_list"):
+            self._concat_sources_list.clear()
+        self._clear_mapping_detail()
+        if hasattr(self, "_mapping_preview_table"):
+            self._mapping_preview_table.model().set_dataframe(pd.DataFrame())
+        if hasattr(self, "_mapping_preview_label"):
+            self._mapping_preview_label.setText("")
 
         self._clear_zone_form_defaults()
         self._invalidate_preview_cache()

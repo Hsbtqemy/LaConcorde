@@ -3,7 +3,7 @@
 Build Windows installer using PyInstaller + Inno Setup.
 
 Usage (on Windows):
-    pip install -e ".[gui]" pyinstaller
+    pip install -e ".[gui,formats]" pyinstaller
     python build_windows_installer.py
 
 Requires Inno Setup (iscc.exe) installed and on PATH.

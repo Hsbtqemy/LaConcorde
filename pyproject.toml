@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laconcorde"
-version = "0.1.0"
+version = "0.1.4"
 description = "Outil de concordance entre tableurs Excel avec fuzzy matching multi-colonnes"
 readme = "README.md"
 license = {text = "MIT"}
@@ -25,6 +25,7 @@ dependencies = [
     "pandas>=2.0.0",
     "openpyxl>=3.1.0",
     "rapidfuzz>=3.0.0",
+    "odfpy>=1.0.0",
 ]
 
 # Optionnel : formats additionnels (.xls, .ods)

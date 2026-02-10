@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import csv
 
 import pandas as pd
 
@@ -34,6 +35,34 @@ def _get_engine(path: Path) -> str | None:
 
 def _is_csv(path: Path) -> bool:
     return path.suffix.lower() == ".csv"
+
+
+def _detect_csv_delimiter(path: Path, encoding: str, *, skip_rows: int = 0) -> str | None:
+    try:
+        with path.open("r", encoding=encoding, errors="replace") as f:
+            for _ in range(skip_rows):
+                if f.readline() == "":
+                    return None
+            sample_lines: list[str] = []
+            for line in f:
+                if line.strip() == "":
+                    continue
+                sample_lines.append(line)
+                if len(sample_lines) >= 5:
+                    break
+        if not sample_lines:
+            return None
+        sample = "".join(sample_lines)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
+            return dialect.delimiter
+        except Exception:
+            first = sample_lines[0]
+            counts = {d: first.count(d) for d in [",", ";", "\t", "|"]}
+            best = max(counts, key=counts.get)
+            return best if counts[best] > 0 else None
+    except Exception:
+        return None
 
 
 def list_sheets(filepath: str | Path) -> list[str]:
@@ -105,13 +134,82 @@ def load_sheet(
 
     header_idx = max(header_row - 1, 0)
     if _is_csv(path):
+        def _read_csv(
+            encoding: str,
+            *,
+            header: int | None,
+            skiprows: range | None = None,
+            engine: str | None = None,
+            sep: str | None = None,
+            on_bad_lines: str | None = None,
+        ) -> pd.DataFrame:
+            kwargs: dict[str, object] = {
+                "dtype": dtype or str,
+                "encoding": encoding,
+                "header": header,
+                "skiprows": skiprows,
+                "engine": engine,
+                "sep": sep,
+            }
+            if on_bad_lines is not None:
+                kwargs["on_bad_lines"] = on_bad_lines
+            return pd.read_csv(path, **kwargs)
+
+        base_skip = range(header_idx) if header_idx > 0 else None
+        header_arg = 0 if header_idx > 0 else header_idx
         try:
-            return pd.read_csv(path, dtype=dtype or str, encoding="utf-8", header=header_idx)
+            delimiter = _detect_csv_delimiter(path, "utf-8", skip_rows=header_idx) or ","
+            return _read_csv("utf-8", header=header_arg, skiprows=base_skip, sep=delimiter)
         except UnicodeDecodeError:
             try:
-                return pd.read_csv(path, dtype=dtype or str, encoding="latin-1", header=header_idx)
+                delimiter = _detect_csv_delimiter(path, "latin-1", skip_rows=header_idx) or ","
+                return _read_csv("latin-1", header=header_arg, skiprows=base_skip, sep=delimiter)
             except Exception as e:
                 raise ExcelFileError(f"Erreur CSV {path}: {e}") from e
+        except pd.errors.ParserError:
+            # Si la première ligne ne contient pas de séparateur, réessaie en la sautant.
+            if header_idx == 0:
+                try:
+                    delimiter = _detect_csv_delimiter(path, "utf-8", skip_rows=1) or ","
+                    return _read_csv("utf-8", header=0, skiprows=range(1), sep=delimiter)
+                except UnicodeDecodeError:
+                    try:
+                        delimiter = _detect_csv_delimiter(path, "latin-1", skip_rows=1) or ","
+                        return _read_csv("latin-1", header=0, skiprows=range(1), sep=delimiter)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            # Fallback avec moteur python + détection du séparateur + lignes invalides ignorées.
+            try:
+                delimiter = _detect_csv_delimiter(path, "utf-8", skip_rows=header_idx) or ","
+                return _read_csv(
+                    "utf-8",
+                    header=header_arg,
+                    skiprows=base_skip,
+                    engine="python",
+                    sep=delimiter,
+                    on_bad_lines="warn",
+                )
+            except UnicodeDecodeError:
+                try:
+                    delimiter = _detect_csv_delimiter(path, "latin-1", skip_rows=header_idx) or ","
+                    return _read_csv(
+                        "latin-1",
+                        header=header_arg,
+                        skiprows=base_skip,
+                        engine="python",
+                        sep=delimiter,
+                        on_bad_lines="warn",
+                    )
+                except Exception as e:
+                    raise ExcelFileError(
+                        f"Erreur CSV {path}: {e}. Vérifiez la ligne d'en-tête et le séparateur."
+                    ) from e
+            except Exception as e:
+                raise ExcelFileError(
+                    f"Erreur CSV {path}: {e}. Vérifiez la ligne d'en-tête et le séparateur."
+                ) from e
         except Exception as e:
             raise ExcelFileError(f"Erreur CSV {path}: {e}") from e
 
@@ -166,13 +264,47 @@ def load_sheet_raw(
         raise ExcelFileError(f"Fichier introuvable: {path}")
 
     if _is_csv(path):
+        def _read_csv(
+            encoding: str,
+            *,
+            engine: str | None = None,
+            sep: str | None = None,
+            on_bad_lines: str | None = None,
+        ) -> pd.DataFrame:
+            kwargs: dict[str, object] = {
+                "dtype": str,
+                "encoding": encoding,
+                "header": None,
+                "engine": engine,
+                "sep": sep,
+            }
+            if on_bad_lines is not None:
+                kwargs["on_bad_lines"] = on_bad_lines
+            return pd.read_csv(path, **kwargs)
+
         try:
-            return pd.read_csv(path, dtype=str, encoding="utf-8", header=None)
+            delimiter = _detect_csv_delimiter(path, "utf-8") or ","
+            return _read_csv("utf-8", sep=delimiter)
         except UnicodeDecodeError:
             try:
-                return pd.read_csv(path, dtype=str, encoding="latin-1", header=None)
+                delimiter = _detect_csv_delimiter(path, "latin-1") or ","
+                return _read_csv("latin-1", sep=delimiter)
             except Exception as e:
                 raise ExcelFileError(f"Erreur CSV {path}: {e}") from e
+        except pd.errors.ParserError:
+            try:
+                delimiter = _detect_csv_delimiter(path, "utf-8") or ","
+                return _read_csv("utf-8", engine="python", sep=delimiter, on_bad_lines="warn")
+            except UnicodeDecodeError:
+                try:
+                    delimiter = _detect_csv_delimiter(path, "latin-1") or ","
+                    return _read_csv("latin-1", engine="python", sep=delimiter, on_bad_lines="warn")
+                except Exception as e:
+                    raise ExcelFileError(
+                        f"Erreur CSV {path}: {e}. Vérifiez le séparateur."
+                    ) from e
+            except Exception as e:
+                raise ExcelFileError(f"Erreur CSV {path}: {e}. Vérifiez le séparateur.") from e
         except Exception as e:
             raise ExcelFileError(f"Erreur CSV {path}: {e}") from e
 

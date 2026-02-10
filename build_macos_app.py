@@ -3,7 +3,7 @@
 Build macOS .app bundle using PyInstaller.
 
 Usage (on macOS):
-    pip install -e ".[gui]" pyinstaller
+    pip install -e ".[gui,formats]" pyinstaller
     python build_macos_app.py
 """
 
