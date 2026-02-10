@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
 from laconcorde_gui.controllers import PipelineController, SessionController
 from laconcorde_gui.screens import ExportScreen, ProjectScreen, RulesScreen, TemplateBuilderScreen, ValidationScreen
 from laconcorde_gui.state import AppState
+from laconcorde_gui.theme import THEME_DARK, THEME_LIGHT, THEME_SYSTEM, build_app_qss, is_dark_mode, normalize_theme_mode
 from laconcorde_gui.workers import ExportWorker, MatchingWorker
 
 
@@ -85,6 +88,55 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._stack)
         self.setCentralWidget(central)
+        self._setup_menu()
+        self._apply_theme()
+
+    def _setup_menu(self) -> None:
+        menu_bar = self.menuBar()
+        view_menu = menu_bar.addMenu("Affichage")
+        theme_menu = view_menu.addMenu("Thème")
+
+        self._theme_action_group = QActionGroup(self)
+        self._theme_action_group.setExclusive(True)
+        self._theme_actions: dict[str, QAction] = {}
+
+        def add_theme_action(label: str, mode: str) -> None:
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, m=mode: self._set_theme_mode(m))
+            theme_menu.addAction(action)
+            self._theme_action_group.addAction(action)
+            self._theme_actions[mode] = action
+
+        add_theme_action("Système", THEME_SYSTEM)
+        add_theme_action("Clair", THEME_LIGHT)
+        add_theme_action("Sombre", THEME_DARK)
+
+        current_mode = normalize_theme_mode(getattr(self._state, "theme_mode", THEME_SYSTEM))
+        if current_mode in self._theme_actions:
+            self._theme_actions[current_mode].setChecked(True)
+
+    def _set_theme_mode(self, mode: str) -> None:
+        self._state.theme_mode = normalize_theme_mode(mode)
+        action = self._theme_actions.get(self._state.theme_mode)
+        if action is not None:
+            action.setChecked(True)
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        dark = is_dark_mode(getattr(self._state, "theme_mode", THEME_SYSTEM))
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(build_app_qss(dark))
+        for screen in (
+            self._template_builder_screen,
+            self._rules_screen,
+            self._validation_screen,
+            self._export_screen,
+            self._project_screen,
+        ):
+            if hasattr(screen, "set_theme_mode"):
+                screen.set_theme_mode(getattr(self._state, "theme_mode", THEME_SYSTEM))
 
     def _connect_screens(self) -> None:
         """Connecte les écrans à la navigation."""

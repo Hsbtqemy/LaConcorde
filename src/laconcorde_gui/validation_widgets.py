@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from laconcorde.matching.schema import MatchCandidate, MatchResult
+from laconcorde_gui.theme import is_dark_mode, normalize_theme_mode
 
 
 def _norm_compare(a: str, b: str) -> bool:
@@ -91,6 +92,7 @@ class FieldComparisonView(QFrame):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._theme_mode = normalize_theme_mode("system")
         self._table = QTableWidget()
         self._table.setColumnCount(4)
         self._table.setHorizontalHeaderLabels(["Champ", "Cible", "Source", "Score"])
@@ -102,11 +104,20 @@ class FieldComparisonView(QFrame):
         self._table.customContextMenuRequested.connect(self._on_context_menu)
         self._explanation_label = QLabel("")
         self._explanation_label.setWordWrap(True)
-        self._explanation_label.setStyleSheet("font-size: 11px; color: #555;")
+        self._apply_theme()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._explanation_label)
         layout.addWidget(self._table)
+
+    def set_theme_mode(self, mode: str) -> None:
+        self._theme_mode = normalize_theme_mode(mode)
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        dark = is_dark_mode(self._theme_mode)
+        hint_color = "#b5b5b5" if dark else "#555"
+        self._explanation_label.setStyleSheet(f"font-size: 11px; color: {hint_color};")
 
     def _on_context_menu(self, pos: Any) -> None:
         item = self._table.itemAt(pos)

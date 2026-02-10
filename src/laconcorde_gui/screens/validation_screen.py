@@ -36,6 +36,7 @@ from laconcorde.matching.schema import MatchCandidate, MatchResult
 
 from laconcorde_gui.models import CandidatesModel, ResultsQueueModel
 from laconcorde_gui.validation_widgets import FieldComparisonView, ScoreProgressDelegate
+from laconcorde_gui.theme import is_dark_mode, normalize_theme_mode
 
 if TYPE_CHECKING:
     from laconcorde_gui.state import AppState
@@ -117,11 +118,13 @@ class ValidationScreen(QWidget):
     ) -> None:
         super().__init__(parent)
         self._state = state
+        self._theme_mode = normalize_theme_mode(getattr(self._state, "theme_mode", "system"))
         self._on_finalize = on_finalize_requested or (lambda: None)
         self._current_result: MatchResult | None = None
         self._current_candidate: MatchCandidate | None = None
         self._setup_ui()
         self._setup_shortcuts()
+        self._apply_theme()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -129,22 +132,16 @@ class ValidationScreen(QWidget):
         layout.setSpacing(6)
 
         # (1) Header synthèse : badges + compteurs + recherche + filtre + toggle tech
-        header = QFrame()
-        header.setFrameShape(QFrame.Shape.StyledPanel)
-        header.setStyleSheet("QFrame { background: #f8f8f8; border-radius: 4px; padding: 4px; }")
-        header_layout = QHBoxLayout(header)
+        self._header_frame = QFrame()
+        self._header_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        header_layout = QHBoxLayout(self._header_frame)
         header_layout.setContentsMargins(8, 4, 8, 4)
         header_layout.setSpacing(12)
         self._badge_auto = QLabel("Auto: 0")
-        self._badge_auto.setStyleSheet("color: #888; font-size: 11px;")
         self._badge_pending = QLabel("À valider: 0")
-        self._badge_pending.setStyleSheet("color: #c67600; font-weight: 600; font-size: 11px;")
         self._badge_ambiguous = QLabel("Ambigus: 0")
-        self._badge_ambiguous.setStyleSheet("color: #e65100; font-weight: 600; font-size: 11px;")
         self._badge_rejected = QLabel("Rejetés: 0")
-        self._badge_rejected.setStyleSheet("color: #666; font-size: 11px;")
         self._badge_skipped = QLabel("Skippés: 0")
-        self._badge_skipped.setStyleSheet("color: #666; font-size: 11px;")
         header_layout.addWidget(self._badge_auto)
         header_layout.addWidget(self._badge_pending)
         header_layout.addWidget(self._badge_ambiguous)
@@ -187,7 +184,7 @@ class ValidationScreen(QWidget):
         help_btn.clicked.connect(self._show_help_dialog)
         header_layout.addWidget(help_btn)
         header_layout.addStretch()
-        layout.addWidget(header)
+        layout.addWidget(self._header_frame)
 
         # (3) Layout 30/70 : queue gauche, candidats+comparison droite
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -237,7 +234,6 @@ class ValidationScreen(QWidget):
         self._candidates_table.horizontalHeader().setStretchLastSection(True)
         candidates_layout.addWidget(self._candidates_table)
         self._top1_info_label = QLabel("")
-        self._top1_info_label.setStyleSheet("font-size: 11px; color: #555;")
         candidates_layout.addWidget(self._top1_info_label)
         accept_btn = QPushButton("✓ Valider (Enter)")
         accept_btn.clicked.connect(self._accept_selected_candidate)
@@ -326,6 +322,41 @@ class ValidationScreen(QWidget):
         self._finalize_btn = QPushButton("Finaliser validation")
         self._finalize_btn.clicked.connect(self._on_finalize_clicked)
         layout.addWidget(self._finalize_btn)
+
+    def set_theme_mode(self, mode: str) -> None:
+        self._theme_mode = normalize_theme_mode(mode)
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        dark = is_dark_mode(self._theme_mode)
+        if hasattr(self, "_header_frame"):
+            header_bg = "#3a3a3a" if dark else "#f8f8f8"
+            self._header_frame.setStyleSheet(
+                f"QFrame {{ background: {header_bg}; border-radius: 4px; padding: 4px; }}"
+            )
+        auto_color = "#b0b0b0" if dark else "#888"
+        pending_color = "#ffb74d" if dark else "#c67600"
+        ambiguous_color = "#ff8a65" if dark else "#e65100"
+        neutral_color = "#9e9e9e" if dark else "#666"
+        if hasattr(self, "_badge_auto"):
+            self._badge_auto.setStyleSheet(f"color: {auto_color}; font-size: 11px;")
+        if hasattr(self, "_badge_pending"):
+            self._badge_pending.setStyleSheet(
+                f"color: {pending_color}; font-weight: 600; font-size: 11px;"
+            )
+        if hasattr(self, "_badge_ambiguous"):
+            self._badge_ambiguous.setStyleSheet(
+                f"color: {ambiguous_color}; font-weight: 600; font-size: 11px;"
+            )
+        if hasattr(self, "_badge_rejected"):
+            self._badge_rejected.setStyleSheet(f"color: {neutral_color}; font-size: 11px;")
+        if hasattr(self, "_badge_skipped"):
+            self._badge_skipped.setStyleSheet(f"color: {neutral_color}; font-size: 11px;")
+        if hasattr(self, "_top1_info_label"):
+            hint_color = "#b5b5b5" if dark else "#555"
+            self._top1_info_label.setStyleSheet(f"font-size: 11px; color: {hint_color};")
+        if hasattr(self, "_field_comparison"):
+            self._field_comparison.set_theme_mode(self._theme_mode)
 
     def _setup_shortcuts(self) -> None:
         from PySide6.QtGui import QKeySequence, QShortcut

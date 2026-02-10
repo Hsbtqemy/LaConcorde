@@ -46,6 +46,9 @@ class AppState:
     # Historique pour undo (pile de (target_row_id, ancien_chosen))
     undo_stack: list[tuple[int, int | None]] = field(default_factory=list)
 
+    # Thème UI ("system", "light", "dark")
+    theme_mode: str = "system"
+
     def build_config_dict(self) -> dict[str, Any]:
         """Construit le config_dict à partir de l'état actuel."""
         d: dict[str, Any] = {}

@@ -33,6 +33,7 @@ from laconcorde.config import (
     VALID_METHODS,
     VALID_OVERWRITE_MODES,
 )
+from laconcorde_gui.theme import is_dark_mode, normalize_theme_mode
 
 if TYPE_CHECKING:
     from laconcorde_gui.state import AppState
@@ -262,7 +263,9 @@ class RulesScreen(QWidget):
         super().__init__(parent)
         self._state = state
         self._on_matching_requested = on_matching_requested or (lambda: None)
+        self._theme_mode = normalize_theme_mode(getattr(self._state, "theme_mode", "system"))
         self._setup_ui()
+        self._apply_theme()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -339,13 +342,12 @@ class RulesScreen(QWidget):
         # Colonnes à transférer
         transfer_group = QGroupBox("Colonnes à transférer")
         transfer_layout = QVBoxLayout()
-        transfer_hint = QLabel(
+        self._transfer_hint = QLabel(
             "Cochez les colonnes source à transférer. "
             "Choisissez la colonne cible (→) : existante = complète les vides, nouvelle = crée la colonne."
         )
-        transfer_hint.setWordWrap(True)
-        transfer_hint.setStyleSheet("color: #555; font-size: 11px;")
-        transfer_layout.addWidget(transfer_hint)
+        self._transfer_hint.setWordWrap(True)
+        transfer_layout.addWidget(self._transfer_hint)
         self._transfer_scroll = QScrollArea()
         self._transfer_scroll.setWidgetResizable(True)
         self._transfer_container = QWidget()
@@ -363,12 +365,11 @@ class RulesScreen(QWidget):
         # Concaténation vers colonne cible
         concat_group = QGroupBox("Concaténation vers colonne cible")
         concat_layout = QVBoxLayout()
-        concat_hint = QLabel(
+        self._concat_hint = QLabel(
             "Combine plusieurs colonnes source dans une colonne cible avec un séparateur et des préfixes optionnels."
         )
-        concat_hint.setWordWrap(True)
-        concat_hint.setStyleSheet("color: #555; font-size: 11px;")
-        concat_layout.addWidget(concat_hint)
+        self._concat_hint.setWordWrap(True)
+        concat_layout.addWidget(self._concat_hint)
 
         self._concat_editors: list[_ConcatTransferEditor] = []
         self._concat_scroll = QScrollArea()
@@ -401,6 +402,18 @@ class RulesScreen(QWidget):
         self._refresh_rules_combos()
         self._refresh_transfer_columns()
         self._refresh_concat_editors()
+
+    def set_theme_mode(self, mode: str) -> None:
+        self._theme_mode = normalize_theme_mode(mode)
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        dark = is_dark_mode(self._theme_mode)
+        hint_color = "#b5b5b5" if dark else "#555"
+        if hasattr(self, "_transfer_hint"):
+            self._transfer_hint.setStyleSheet(f"color: {hint_color}; font-size: 11px;")
+        if hasattr(self, "_concat_hint"):
+            self._concat_hint.setStyleSheet(f"color: {hint_color}; font-size: 11px;")
 
     def _refresh_rules_combos(self) -> None:
         """Met à jour les combos des règles existantes avec les colonnes disponibles."""

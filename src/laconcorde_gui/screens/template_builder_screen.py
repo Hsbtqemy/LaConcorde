@@ -7,6 +7,7 @@ import pandas as pd
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -23,8 +25,13 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QToolButton,
     QSizePolicy,
+    QSplitter,
     QSpinBox,
+    QStyle,
     QStackedWidget,
     QTableView,
     QVBoxLayout,
@@ -39,6 +46,7 @@ from laconcorde.template_builder import (
     build_output,
 )
 from laconcorde_gui.models import DataFrameModel
+from laconcorde_gui.theme import is_dark_mode, normalize_theme_mode
 from laconcorde_gui.workers import TemplateBuilderWorker
 
 
@@ -59,6 +67,9 @@ def _format_int_list(values: list[int]) -> str:
     return ", ".join(str(v) for v in values)
 
 
+CONCAT_MENU_VALUE = "__CONCAT__"
+
+
 class _ConcatSourceWidget(QWidget):
     changed = Signal()
 
@@ -72,8 +83,8 @@ class _ConcatSourceWidget(QWidget):
         self._prefix_edit.setPlaceholderText("Préfixe (optionnel)")
         layout.addWidget(self._col_combo, 2)
         layout.addWidget(self._prefix_edit, 3)
-        self._col_combo.currentTextChanged.connect(self.changed.emit)
-        self._prefix_edit.editingFinished.connect(self.changed.emit)
+        self._col_combo.currentTextChanged.connect(lambda _text=None: self.changed.emit())
+        self._prefix_edit.editingFinished.connect(lambda: self.changed.emit())
         self.refresh_source_cols(source_cols, current=col)
         if prefix:
             self._prefix_edit.setText(prefix)
@@ -111,6 +122,7 @@ class _ConcatDialog(QDialog):
 
         form = QFormLayout()
         self._separator_edit = QLineEdit("; ")
+        self._separator_edit.setPlaceholderText("Ex: ; ou \\n")
         self._skip_empty_cb = QCheckBox("Ignorer vides")
         self._skip_empty_cb.setChecked(True)
         self._dedupe_cb = QCheckBox("Dédupliquer les valeurs")
@@ -224,6 +236,7 @@ class TemplateBuilderScreen(QWidget):
     def __init__(self, state: object, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._state = state
+        self._theme_mode = normalize_theme_mode(getattr(self._state, "theme_mode", "system"))
         self._template_df_raw = None
         self._source_df = None
         self._zones: list[dict[str, Any]] = list(getattr(self._state, "template_builder_config", {}).get("zones", []))
@@ -231,6 +244,9 @@ class TemplateBuilderScreen(QWidget):
         self._current_mapping_cols: list[int] = []
         self._current_mapping_labels: list[str] = []
         self._mapping_concat_loading = False
+        self._current_preview_col: int | None = None
+        self._preview_combo_by_col: dict[int, QComboBox] = {}
+        self._preview_concat_btn_by_col: dict[int, QPushButton] = {}
         self._worker: TemplateBuilderWorker | None = None
         self._preview_frames: dict[str, Any] = {}
         self._preview_cache_key: str | None = None
@@ -248,18 +264,12 @@ class TemplateBuilderScreen(QWidget):
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
+        self.setObjectName("TemplateBuilderScreen")
+        self._apply_theme()
         self._step_names = ["Import", "Zones", "Mapping", "Agrégation", "Export"]
-        stepper_row = QHBoxLayout()
-        self._stepper_labels: list[QLabel] = []
-        for i, name in enumerate(self._step_names):
-            label = QLabel(name)
-            self._stepper_labels.append(label)
-            stepper_row.addWidget(label)
-            if i < len(self._step_names) - 1:
-                stepper_row.addWidget(QLabel("→"))
-        stepper_row.addStretch()
-        layout.addLayout(stepper_row)
         self._step_title = QLabel("Étape 1 — Import")
+        self._step_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._step_title.setStyleSheet("font-weight: 600;")
         layout.addWidget(self._step_title)
 
         self._stack = QStackedWidget()
@@ -286,6 +296,61 @@ class TemplateBuilderScreen(QWidget):
         self._update_step_controls()
         # Appliquer le mode par défaut (zone unique)
         self._set_zone_mode("single")
+
+    def _is_dark_theme(self) -> bool:
+        return is_dark_mode(self._theme_mode)
+
+    def set_theme_mode(self, mode: str) -> None:
+        self._theme_mode = normalize_theme_mode(mode)
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        dark = self._is_dark_theme()
+        if dark:
+            qss = (
+                "#TemplateBuilderScreen { background: #2f2f2f; color: #f0f0f0; }"
+                "#TemplateBuilderScreen QGroupBox { background: #3a3a3a; border: 1px solid #555; margin-top: 12px; }"
+                "#TemplateBuilderScreen QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #f0f0f0; }"
+                "#TemplateBuilderScreen QPushButton, #TemplateBuilderScreen QToolButton {"
+                " background: #444; color: #f0f0f0; border: 1px solid #666; padding: 4px 8px; }"
+                "#TemplateBuilderScreen QPushButton:hover, #TemplateBuilderScreen QToolButton:hover { background: #505050; }"
+                "#TemplateBuilderScreen QLineEdit, #TemplateBuilderScreen QComboBox, #TemplateBuilderScreen QSpinBox,"
+                " #TemplateBuilderScreen QListWidget, #TemplateBuilderScreen QTableView, #TemplateBuilderScreen QTableWidget {"
+                " background: #2b2b2b; color: #f0f0f0; border: 1px solid #666; }"
+                "#TemplateBuilderScreen QComboBox QAbstractItemView { background: #2b2b2b; color: #f0f0f0; }"
+                "#TemplateBuilderScreen QListWidget::item:selected { background: #3a5a8a; color: #ffffff; }"
+                "#TemplateBuilderScreen QTableWidget::item:selected, #TemplateBuilderScreen QTableView::item:selected {"
+                " background: #3a5a8a; color: #ffffff; }"
+                "#TemplateBuilderScreen QHeaderView::section { background: #404040; color: #f0f0f0; }"
+                "#TemplateBuilderScreen QWidget[previewHeaderCell=\"true\"] { background: #2b2b2b; }"
+                "#TemplateBuilderScreen QLabel#mappingModeBadge {"
+                " background: #4a4a4a; color: #f0f0f0; border: 1px solid #666; border-radius: 8px; padding: 2px 8px; font-size: 11px; }"
+                "#TemplateBuilderScreen QLabel#previewCacheBadge {"
+                " background: #4a4a4a; color: #f0f0f0; border: 1px solid #666; border-radius: 8px; padding: 2px 8px; font-size: 11px; }"
+            )
+        else:
+            qss = (
+                "#TemplateBuilderScreen { background: #efefef; color: #111111; }"
+                "#TemplateBuilderScreen QGroupBox { background: #f7f7f7; border: 1px solid #d6d6d6; margin-top: 12px; }"
+                "#TemplateBuilderScreen QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #111111; }"
+                "#TemplateBuilderScreen QPushButton, #TemplateBuilderScreen QToolButton {"
+                " background: #efefef; color: #111111; border: 1px solid #c9c9c9; padding: 4px 8px; }"
+                "#TemplateBuilderScreen QPushButton:hover, #TemplateBuilderScreen QToolButton:hover { background: #e6e6e6; }"
+                "#TemplateBuilderScreen QLineEdit, #TemplateBuilderScreen QComboBox, #TemplateBuilderScreen QSpinBox,"
+                " #TemplateBuilderScreen QListWidget, #TemplateBuilderScreen QTableView, #TemplateBuilderScreen QTableWidget {"
+                " background: #ffffff; color: #111111; border: 1px solid #cfcfcf; }"
+                "#TemplateBuilderScreen QComboBox QAbstractItemView { background: #ffffff; color: #111111; }"
+                "#TemplateBuilderScreen QListWidget::item:selected { background: #cfe3ff; color: #111111; }"
+                "#TemplateBuilderScreen QTableWidget::item:selected, #TemplateBuilderScreen QTableView::item:selected {"
+                " background: #cfe3ff; color: #111111; }"
+                "#TemplateBuilderScreen QHeaderView::section { background: #f2f2f2; color: #111111; }"
+                "#TemplateBuilderScreen QWidget[previewHeaderCell=\"true\"] { background: #ffffff; }"
+                "#TemplateBuilderScreen QLabel#mappingModeBadge {"
+                " background: #eef2f7; color: #394150; border: 1px solid #d5dbe3; border-radius: 8px; padding: 2px 8px; font-size: 11px; }"
+                "#TemplateBuilderScreen QLabel#previewCacheBadge {"
+                " background: #eef2f7; color: #394150; border: 1px solid #d5dbe3; border-radius: 8px; padding: 2px 8px; font-size: 11px; }"
+            )
+        self.setStyleSheet(qss)
 
     def _build_import_page(self) -> QWidget:
         page = QWidget()
@@ -525,9 +590,13 @@ class TemplateBuilderScreen(QWidget):
     def _build_mapping_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
+        main_split = QSplitter(Qt.Orientation.Vertical)
+        outer.addWidget(main_split, 1)
 
-        top_row = QHBoxLayout()
-        outer.addLayout(top_row, 3)
+        top_container = QWidget()
+        top_row = QHBoxLayout(top_container)
+        top_container.setMinimumHeight(320)
+        top_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
         left = QVBoxLayout()
         self._mapping_zone_list = QListWidget()
@@ -539,27 +608,21 @@ class TemplateBuilderScreen(QWidget):
         self._mapping_zone_panel.setLayout(left)
         top_row.addWidget(self._mapping_zone_panel, 1)
 
-        mapping_row = QHBoxLayout()
-        top_row.addLayout(mapping_row, 4)
+        mapping_panel = QWidget()
+        mapping_panel_layout = QVBoxLayout(mapping_panel)
+        mapping_panel_layout.setContentsMargins(0, 0, 0, 0)
+        mapping_panel_layout.setSpacing(8)
+        top_row.addWidget(mapping_panel, 3)
 
         source_group = QGroupBox("Colonnes source")
         source_layout = QVBoxLayout()
         self._mapping_source_list = QListWidget()
         self._mapping_source_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        # style via theme
         source_layout.addWidget(self._mapping_source_list)
         source_group.setLayout(source_layout)
-        mapping_row.addWidget(source_group, 2)
-
-        target_group = QGroupBox("Champs cible (template)")
-        target_layout = QVBoxLayout()
-
-        self._mapping_target_list = QListWidget()
-        self._mapping_target_list.currentRowChanged.connect(self._on_mapping_target_selected)
-        self._mapping_target_list.setMinimumHeight(300)
-        self._mapping_target_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        target_layout.addWidget(self._mapping_target_list, 1)
-        target_group.setLayout(target_layout)
-        mapping_row.addWidget(target_group, 3)
+        source_group.setMinimumHeight(220)
+        source_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         detail_group = QGroupBox("Détails")
         detail_layout = QVBoxLayout()
@@ -571,16 +634,7 @@ class TemplateBuilderScreen(QWidget):
         header_row.addWidget(self._mapping_target_label, 1)
         self._mapping_mode_badge = QLabel("—")
         self._mapping_mode_badge.setObjectName("mappingModeBadge")
-        self._mapping_mode_badge.setStyleSheet(
-            "QLabel#mappingModeBadge {"
-            "background: #eef2f7;"
-            "color: #394150;"
-            "border: 1px solid #d5dbe3;"
-            "border-radius: 8px;"
-            "padding: 2px 8px;"
-            "font-size: 11px;"
-            "}"
-        )
+        # style via theme
         header_row.addWidget(self._mapping_mode_badge)
         detail_layout.addLayout(header_row)
 
@@ -588,31 +642,13 @@ class TemplateBuilderScreen(QWidget):
         self._mapping_detail_hint.setWordWrap(True)
         detail_layout.addWidget(self._mapping_detail_hint)
 
-        actions_row = QHBoxLayout()
-        self._map_simple_btn = QPushButton("Associer simple →")
-        self._map_simple_btn.clicked.connect(self._map_simple_current)
-        self._map_concat_btn = QPushButton("Associer concat →")
-        self._map_concat_btn.clicked.connect(self._map_concat_current)
-        self._unmap_btn = QPushButton("Retirer mapping")
-        self._unmap_btn.clicked.connect(self._remove_mapping_current)
-        actions_row.addWidget(self._map_simple_btn)
-        actions_row.addWidget(self._map_concat_btn)
-        actions_row.addWidget(self._unmap_btn)
-        actions_row.addStretch()
-        detail_layout.addLayout(actions_row)
-
-        self._mapping_simple_panel = QWidget()
-        simple_form = QFormLayout()
-        self._mapping_simple_combo = QComboBox()
-        self._mapping_simple_combo.currentTextChanged.connect(self._on_simple_source_changed)
-        simple_form.addRow("Source:", self._mapping_simple_combo)
-        self._mapping_simple_panel.setLayout(simple_form)
-        detail_layout.addWidget(self._mapping_simple_panel)
+        # Les actions se font directement depuis la preview (menu + bouton concat).
 
         self._mapping_concat_panel = QWidget()
         concat_layout = QVBoxLayout()
         concat_form = QFormLayout()
         self._concat_sep_edit = QLineEdit("; ")
+        self._concat_sep_edit.setPlaceholderText("Ex: ; ou \\n")
         self._concat_sep_edit.editingFinished.connect(self._on_concat_changed)
         self._concat_skip_empty_cb = QCheckBox("Ignorer vides")
         self._concat_skip_empty_cb.setChecked(True)
@@ -627,8 +663,9 @@ class TemplateBuilderScreen(QWidget):
         concat_layout.addWidget(QLabel("Colonnes concaténées (ordre)"))
         self._concat_sources_list = QListWidget()
         self._concat_sources_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self._concat_sources_list.setMinimumHeight(220)
+        self._concat_sources_list.setMinimumHeight(200)
         self._concat_sources_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # style via theme
         concat_layout.addWidget(self._concat_sources_list, 1)
 
         concat_btns = QHBoxLayout()
@@ -651,13 +688,29 @@ class TemplateBuilderScreen(QWidget):
         self._mapping_concat_panel.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        detail_layout.addWidget(self._mapping_concat_panel)
-        detail_layout.addStretch()
         detail_group.setLayout(detail_layout)
-        detail_group.setMinimumHeight(320)
-        mapping_row.addWidget(detail_group, 4)
+        detail_group.setMinimumHeight(90)
+        detail_group.setMaximumHeight(140)
+        detail_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        mapping_panel_layout.addWidget(source_group, 3)
+        mapping_panel_layout.addWidget(detail_group, 1)
+
+        concat_group = QGroupBox("Concaténation")
+        concat_group_layout = QVBoxLayout()
+        self._concat_empty_hint = QLabel(
+            "Sélectionnez un champ cible puis choisissez Concat dans la preview."
+        )
+        self._concat_empty_hint.setWordWrap(True)
+        concat_group_layout.addWidget(self._concat_empty_hint)
+        concat_group_layout.addWidget(self._mapping_concat_panel, 1)
+        concat_group.setLayout(concat_group_layout)
+        concat_group.setMinimumHeight(260)
+        top_row.addWidget(concat_group, 2)
 
         preview_group = QGroupBox("Prévisualisation (zone courante)")
+        preview_group.setMinimumHeight(180)
+        preview_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         preview_layout = QVBoxLayout()
         preview_controls = QHBoxLayout()
         preview_controls.addWidget(QLabel("Lignes de données:"))
@@ -673,14 +726,27 @@ class TemplateBuilderScreen(QWidget):
         preview_layout.addLayout(preview_controls)
         self._mapping_preview_label = QLabel("")
         preview_layout.addWidget(self._mapping_preview_label)
-        self._mapping_preview_table = QTableView()
-        self._mapping_preview_table.setModel(DataFrameModel())
-        self._mapping_preview_table.horizontalHeader().setStretchLastSection(True)
+        self._mapping_preview_table = QTableWidget()
+        self._mapping_preview_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self._mapping_preview_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._mapping_preview_table.verticalHeader().setVisible(False)
+        header = self._mapping_preview_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(False)
+        self._mapping_preview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._mapping_preview_table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        # style via theme
+        self._mapping_preview_table.cellClicked.connect(self._on_preview_cell_clicked)
         preview_layout.addWidget(self._mapping_preview_table)
         preview_group.setLayout(preview_layout)
-        outer.addWidget(preview_group, 2)
 
-        self._mapping_simple_panel.setVisible(False)
+        main_split.addWidget(top_container)
+        main_split.addWidget(preview_group)
+        main_split.setStretchFactor(0, 3)
+        main_split.setStretchFactor(1, 2)
+        main_split.setChildrenCollapsible(False)
+        main_split.setSizes([600, 400])
+
         self._mapping_concat_panel.setVisible(False)
 
         return page
@@ -723,6 +789,7 @@ class TemplateBuilderScreen(QWidget):
         form = QFormLayout()
         self._output_mode_combo = QComboBox()
         self._output_mode_combo.addItems(["single", "multi"])
+        self._output_mode_combo.setMinimumWidth(140)
         self._output_sheet_edit = QLineEdit("Output")
         form.addRow("Mode:", self._output_mode_combo)
         form.addRow("Nom feuille (mode single):", self._output_sheet_edit)
@@ -778,16 +845,7 @@ class TemplateBuilderScreen(QWidget):
         preview_layout.addWidget(self._preview_label)
         self._preview_cache_label = QLabel("")
         self._preview_cache_label.setObjectName("previewCacheBadge")
-        self._preview_cache_label.setStyleSheet(
-            "QLabel#previewCacheBadge {"
-            "background: #eef2f7;"
-            "color: #394150;"
-            "border: 1px solid #d5dbe3;"
-            "border-radius: 8px;"
-            "padding: 2px 8px;"
-            "font-size: 11px;"
-            "}"
-        )
+        # style via theme
         preview_layout.addWidget(self._preview_cache_label)
         self._preview_table = QTableView()
         self._preview_table.setModel(DataFrameModel())
@@ -807,13 +865,6 @@ class TemplateBuilderScreen(QWidget):
         self._next_btn.setVisible(not is_last)
         if 0 <= idx < len(self._step_names):
             self._step_title.setText(f"Étape {idx + 1} — {self._step_names[idx]}")
-            for i, label in enumerate(self._stepper_labels):
-                if i == idx:
-                    label.setStyleSheet("font-weight: 600; color: #111;")
-                elif i < idx:
-                    label.setStyleSheet("color: #444;")
-                else:
-                    label.setStyleSheet("color: #888;")
 
     def _next_step(self) -> None:
         idx = self._stack.currentIndex()
@@ -1265,10 +1316,7 @@ class TemplateBuilderScreen(QWidget):
     def _load_zone_mapping(self, idx: int) -> None:
         self._current_mapping_cols = []
         self._current_mapping_labels = []
-        if hasattr(self, "_mapping_target_list"):
-            self._mapping_target_list.blockSignals(True)
-            self._mapping_target_list.clear()
-            self._mapping_target_list.blockSignals(False)
+        self._current_preview_col = None
         if idx < 0 or idx >= len(self._zones):
             self._clear_mapping_detail()
             self._refresh_mapping_preview()
@@ -1296,20 +1344,10 @@ class TemplateBuilderScreen(QWidget):
                 self._set_mapping(zone, label, col_index, data)
                 auto_mapped = True
 
-        if hasattr(self, "_mapping_target_list"):
-            self._mapping_target_list.blockSignals(True)
-            for target in targets:
-                label = target["label"]
-                col_index = target["col_index"]
-                mapping = self._get_mapping(zone, label, col_index)
-                item = QListWidgetItem(self._format_target_display(label, mapping))
-                self._mapping_target_list.addItem(item)
-            self._mapping_target_list.blockSignals(False)
-
-            if targets:
-                self._mapping_target_list.setCurrentRow(0)
-            else:
-                self._clear_mapping_detail()
+        if targets:
+            self._current_preview_col = 0
+        else:
+            self._clear_mapping_detail()
 
         if auto_mapped:
             self._invalidate_preview_cache()
@@ -1322,14 +1360,12 @@ class TemplateBuilderScreen(QWidget):
         if hasattr(self, "_mapping_source_list"):
             self._mapping_source_list.blockSignals(True)
             self._mapping_source_list.clear()
-            self._mapping_source_list.addItems(source_cols)
+            for col in source_cols:
+                item = QListWidgetItem(col)
+                item.setData(Qt.ItemDataRole.UserRole, col)
+                self._mapping_source_list.addItem(item)
             self._mapping_source_list.blockSignals(False)
-
-        if hasattr(self, "_mapping_simple_combo"):
-            self._mapping_simple_combo.blockSignals(True)
-            self._mapping_simple_combo.clear()
-            self._mapping_simple_combo.addItems([""] + source_cols)
-            self._mapping_simple_combo.blockSignals(False)
+            self._refresh_source_usage()
 
         self._refresh_concat_source_widgets(source_cols)
 
@@ -1342,33 +1378,6 @@ class TemplateBuilderScreen(QWidget):
             if isinstance(widget, _ConcatSourceWidget):
                 widget.refresh_source_cols(source_cols)
 
-    def _format_target_display(self, label: str, mapping: dict[str, Any] | None) -> str:
-        base = label or "(sans label)"
-        if not mapping or mapping.get("mode") == "ignore":
-            return base
-        mode = mapping.get("mode")
-        if mode == "simple":
-            src = mapping.get("source_col") or ""
-            return f"{base} ← {src}" if src else f"{base} ← (vide)"
-        if mode == "concat":
-            summary = self._format_concat_summary(mapping.get("concat"))
-            return f"{base} ← {summary}" if summary else f"{base} ← concat"
-        return base
-
-    def _update_target_item(self, row_idx: int) -> None:
-        if not hasattr(self, "_mapping_target_list"):
-            return
-        item = self._mapping_target_list.item(row_idx)
-        if item is None:
-            return
-        zone = self._current_zone_for_mapping()
-        if zone is None:
-            return
-        label = self._current_mapping_labels[row_idx]
-        col_index = self._current_mapping_cols[row_idx]
-        mapping = self._get_mapping(zone, label, col_index)
-        item.setText(self._format_target_display(label, mapping))
-
     def _clear_mapping_detail(self, message: str | None = None) -> None:
         if not hasattr(self, "_mapping_target_label"):
             return
@@ -1378,8 +1387,12 @@ class TemplateBuilderScreen(QWidget):
             message or "Sélectionnez un champ cible pour configurer le mapping."
         )
         self._mapping_detail_hint.setVisible(True)
-        self._mapping_simple_panel.setVisible(False)
         self._mapping_concat_panel.setVisible(False)
+        if hasattr(self, "_concat_empty_hint"):
+            self._concat_empty_hint.setText(
+                "Sélectionnez un champ cible puis choisissez Concat dans la preview."
+            )
+            self._concat_empty_hint.setVisible(True)
 
     def _set_mapping_mode_badge(self, mode: str) -> None:
         labels = {"ignore": "Ignorer", "simple": "Simple", "concat": "Concat"}
@@ -1387,58 +1400,74 @@ class TemplateBuilderScreen(QWidget):
 
     def _current_mapping_target(self) -> tuple[dict[str, Any], int, str, int] | None:
         zone = self._current_zone_for_mapping()
-        if zone is None or not hasattr(self, "_mapping_target_list"):
+        if zone is None or not self._current_mapping_cols:
             return None
-        row = self._mapping_target_list.currentRow()
-        if row < 0 or row >= len(self._current_mapping_cols):
+        col_idx = self._current_preview_col if self._current_preview_col is not None else 0
+        if col_idx < 0 or col_idx >= len(self._current_mapping_cols):
             return None
-        label = self._current_mapping_labels[row]
-        col_index = self._current_mapping_cols[row]
-        return zone, row, label, col_index
+        label = self._current_mapping_labels[col_idx]
+        col_index = self._current_mapping_cols[col_idx]
+        return zone, col_idx, label, col_index
 
-    def _on_mapping_target_selected(self, row_idx: int) -> None:
+    def _select_target_col(self, col_idx: int) -> None:
+        self._current_preview_col = col_idx
+        if hasattr(self, "_mapping_preview_table"):
+            try:
+                self._mapping_preview_table.setCurrentCell(0, col_idx)
+            except Exception:
+                pass
         info = self._current_mapping_target()
         if info is None:
             self._clear_mapping_detail()
             return
-        zone, row_idx, label, col_index = info
+        zone, _, label, col_index = info
         mapping = self._get_mapping(zone, label, col_index)
         mode = mapping.get("mode") if mapping else "ignore"
         self._mapping_target_label.setText(label or "(sans label)")
         self._set_mapping_mode_badge(mode)
         if mode == "simple":
-            self._mapping_detail_hint.setVisible(False)
-            self._mapping_simple_panel.setVisible(True)
+            self._mapping_detail_hint.setText("Mapping simple défini via la preview.")
+            self._mapping_detail_hint.setVisible(True)
             self._mapping_concat_panel.setVisible(False)
-            self._mapping_simple_combo.blockSignals(True)
-            self._mapping_simple_combo.setCurrentText(mapping.get("source_col") if mapping else "")
-            self._mapping_simple_combo.blockSignals(False)
+            if hasattr(self, "_concat_empty_hint"):
+                self._concat_empty_hint.setText(
+                    "Sélectionnez un champ cible puis choisissez Concat dans la preview."
+                )
+                self._concat_empty_hint.setVisible(True)
         elif mode == "concat":
             self._mapping_detail_hint.setVisible(False)
-            self._mapping_simple_panel.setVisible(False)
             self._mapping_concat_panel.setVisible(True)
+            if hasattr(self, "_concat_empty_hint"):
+                self._concat_empty_hint.setVisible(False)
             self._load_concat_editor(mapping.get("concat") if mapping else None)
         else:
             self._mapping_detail_hint.setText("Aucune association (ignore).")
             self._mapping_detail_hint.setVisible(True)
-            self._mapping_simple_panel.setVisible(False)
             self._mapping_concat_panel.setVisible(False)
+            if hasattr(self, "_concat_empty_hint"):
+                self._concat_empty_hint.setText(
+                    "Sélectionnez un champ cible puis choisissez Concat dans la preview."
+                )
+                self._concat_empty_hint.setVisible(True)
 
     def _get_primary_source_column(self) -> str:
         if not hasattr(self, "_mapping_source_list"):
             return ""
         current = self._mapping_source_list.currentItem()
         if current is not None:
-            return current.text()
+            return current.data(Qt.ItemDataRole.UserRole) or current.text()
         items = self._mapping_source_list.selectedItems()
         if items:
-            return items[0].text()
+            return items[0].data(Qt.ItemDataRole.UserRole) or items[0].text()
         return ""
 
     def _selected_source_columns(self) -> list[str]:
         if not hasattr(self, "_mapping_source_list"):
             return []
-        return [item.text() for item in self._mapping_source_list.selectedItems()]
+        out: list[str] = []
+        for item in self._mapping_source_list.selectedItems():
+            out.append(item.data(Qt.ItemDataRole.UserRole) or item.text())
+        return out
 
     def _map_simple_current(self) -> None:
         info = self._current_mapping_target()
@@ -1457,11 +1486,10 @@ class TemplateBuilderScreen(QWidget):
             "source_col": source_col,
         }
         self._set_mapping(zone, label, col_index, data)
-        self._update_target_item(row_idx)
-        self._mapping_target_list.setCurrentRow(row_idx)
         self._set_mapping_mode_badge("simple")
         self._invalidate_preview_cache()
         self._refresh_mapping_preview()
+        self._refresh_source_usage()
 
     def _map_concat_current(self) -> None:
         info = self._current_mapping_target()
@@ -1491,11 +1519,10 @@ class TemplateBuilderScreen(QWidget):
             "concat": concat,
         }
         self._set_mapping(zone, label, col_index, data)
-        self._update_target_item(row_idx)
-        self._mapping_target_list.setCurrentRow(row_idx)
         self._set_mapping_mode_badge("concat")
         self._invalidate_preview_cache()
         self._refresh_mapping_preview()
+        self._refresh_source_usage()
 
     def _remove_mapping_current(self) -> None:
         info = self._current_mapping_target()
@@ -1504,10 +1531,10 @@ class TemplateBuilderScreen(QWidget):
             return
         zone, row_idx, label, col_index = info
         self._remove_mapping(zone, label, col_index)
-        self._update_target_item(row_idx)
         self._clear_mapping_detail("Aucune association (ignore).")
         self._invalidate_preview_cache()
         self._refresh_mapping_preview()
+        self._refresh_source_usage()
 
     def _on_simple_source_changed(self, source_col: str) -> None:
         info = self._current_mapping_target()
@@ -1524,9 +1551,9 @@ class TemplateBuilderScreen(QWidget):
             "source_col": source_col or "",
         }
         self._set_mapping(zone, label, col_index, data)
-        self._update_target_item(row_idx)
         self._invalidate_preview_cache()
         self._refresh_mapping_preview()
+        self._refresh_source_usage()
 
     def _add_concat_source(self, col: str | None = None, prefix: str = "") -> None:
         if not hasattr(self, "_concat_sources_list"):
@@ -1622,9 +1649,9 @@ class TemplateBuilderScreen(QWidget):
             "concat": concat,
         }
         self._set_mapping(zone, label, col_index, data)
-        self._update_target_item(row_idx)
         self._invalidate_preview_cache()
         self._refresh_mapping_preview()
+        self._refresh_source_usage()
 
     def _build_zone_preview_frame(self, zone: dict[str, Any], max_rows: int) -> pd.DataFrame:
         if self._template_df_raw is None or self._source_df is None:
@@ -1638,11 +1665,11 @@ class TemplateBuilderScreen(QWidget):
             return
         zone = self._current_zone_for_mapping()
         if zone is None:
-            self._mapping_preview_table.model().set_dataframe(pd.DataFrame())
+            self._mapping_preview_table.clear()
             self._mapping_preview_label.setText("Prévisualisation indisponible.")
             return
         if self._template_df_raw is None or self._source_df is None:
-            self._mapping_preview_table.model().set_dataframe(pd.DataFrame())
+            self._mapping_preview_table.clear()
             self._mapping_preview_label.setText("Chargez un template et une source.")
             return
         max_rows = 5
@@ -1651,14 +1678,205 @@ class TemplateBuilderScreen(QWidget):
         try:
             df = self._build_zone_preview_frame(zone, max_rows)
         except Exception as e:
-            self._mapping_preview_table.model().set_dataframe(pd.DataFrame())
+            self._mapping_preview_table.clear()
             self._mapping_preview_label.setText(f"Erreur preview: {e}")
             return
-        self._mapping_preview_table.model().set_dataframe(df)
+
+        targets = self._get_zone_target_columns(zone)
+        self._current_mapping_cols = [t["col_index"] for t in targets]
+        self._current_mapping_labels = [t["label"] for t in targets]
+        col_count = len(targets)
+
+        header_rows = self._calc_header_rows(zone)
+        data_df = df
+        if header_rows > 0:
+            data_df = df.iloc[header_rows:, :].copy()
+        if max_rows is not None and len(data_df) > max_rows:
+            data_df = data_df.iloc[:max_rows, :].copy()
+
+        row_count = 1 + len(data_df)
+        self._mapping_preview_table.clear()
+        self._mapping_preview_table.setRowCount(row_count)
+        self._mapping_preview_table.setColumnCount(col_count)
+        self._mapping_preview_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+        self._preview_combo_by_col = {}
+        self._preview_concat_btn_by_col = {}
+        source_cols = self._get_source_cols()
+
+        for col_idx, target in enumerate(targets):
+            label = target["label"]
+            col_index = target["col_index"]
+            mapping = self._get_mapping(zone, label, col_index)
+            cell = self._build_mapping_cell_widget(col_idx, label, mapping, source_cols)
+            self._mapping_preview_table.setCellWidget(0, col_idx, cell)
+
+        for r in range(len(data_df)):
+            for c in range(col_count):
+                value = ""
+                if c < data_df.shape[1]:
+                    val = data_df.iat[r, c]
+                    value = "" if pd.isna(val) else str(val)
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._mapping_preview_table.setItem(r + 1, c, item)
+
+        self._mapping_preview_table.setRowHeight(0, 64)
+        self._adjust_preview_column_widths()
+
+        if self._current_preview_col is None and col_count > 0:
+            self._current_preview_col = 0
+        if self._current_preview_col is not None and self._current_preview_col < col_count:
+            self._select_target_col(self._current_preview_col)
+        self._refresh_source_usage()
+
         name = (zone.get("name") or "").strip() or "Zone"
         self._mapping_preview_label.setText(
-            f"{name}: {df.shape[0]} lignes × {df.shape[1]} colonnes"
+            f"{name}: {len(data_df)} lignes × {col_count} colonnes"
         )
+
+    def _build_mapping_cell_widget(
+        self,
+        col_idx: int,
+        label: str,
+        mapping: dict[str, Any] | None,
+        source_cols: list[str],
+    ) -> QWidget:
+        container = QWidget()
+        container.setProperty("previewHeaderCell", True)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(4)
+
+        title = QLabel(label or "(sans label)")
+        title.setWordWrap(False)
+        title.setStyleSheet("font-size: 11px; font-weight: 600;")
+        layout.addWidget(title)
+
+        row = QHBoxLayout()
+        combo = QComboBox()
+        combo.addItem("—", "")
+        combo.addItem("Concat…", CONCAT_MENU_VALUE)
+        for col in source_cols:
+            combo.addItem(col, col)
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        # style via theme
+
+        current_value = ""
+        if mapping:
+            mode = mapping.get("mode")
+            if mode == "concat":
+                current_value = CONCAT_MENU_VALUE
+            elif mode == "simple":
+                current_value = mapping.get("source_col") or ""
+        if current_value:
+            idx = combo.findData(current_value)
+            if idx >= 0:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(idx)
+                combo.blockSignals(False)
+
+        combo.currentTextChanged.connect(lambda _text, c=col_idx: self._on_preview_combo_changed(c))
+        row.addWidget(combo, 1)
+
+        concat_btn = QToolButton()
+        concat_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        concat_btn.setToolTip("Concat")
+        concat_btn.setFixedWidth(26)
+        concat_btn.clicked.connect(lambda _=None, c=col_idx: self._on_preview_concat_clicked(c))
+        row.addWidget(concat_btn)
+        layout.addLayout(row)
+
+        self._preview_combo_by_col[col_idx] = combo
+        self._preview_concat_btn_by_col[col_idx] = concat_btn
+        return container
+
+    def _adjust_preview_column_widths(self) -> None:
+        if not hasattr(self, "_mapping_preview_table"):
+            return
+        table = self._mapping_preview_table
+        min_width = 160
+        for col in range(table.columnCount()):
+            width = table.sizeHintForColumn(col)
+            widget = table.cellWidget(0, col)
+            if widget is not None:
+                width = max(width, widget.sizeHint().width())
+            table.setColumnWidth(col, max(min_width, width + 12))
+
+    def _on_preview_cell_clicked(self, row: int, col: int) -> None:
+        if row < 0 or col < 0:
+            return
+        self._select_target_col(col)
+
+    def _on_preview_combo_changed(self, col_idx: int) -> None:
+        combo = self._preview_combo_by_col.get(col_idx)
+        if combo is None:
+            return
+        value = combo.currentData()
+        self._select_target_col(col_idx)
+        if value == CONCAT_MENU_VALUE:
+            self._map_concat_current()
+            return
+        if value in ("", None):
+            self._remove_mapping_current()
+            return
+        info = self._current_mapping_target()
+        if info is None:
+            return
+        zone, _, label, col_index = info
+        data = {
+            "col_index": col_index,
+            "target": label,
+            "mode": "simple",
+            "source_col": str(value),
+        }
+        self._set_mapping(zone, label, col_index, data)
+        self._set_mapping_mode_badge("simple")
+        self._invalidate_preview_cache()
+        self._refresh_mapping_preview()
+        self._refresh_source_usage()
+
+    def _on_preview_concat_clicked(self, col_idx: int) -> None:
+        self._select_target_col(col_idx)
+        self._map_concat_current()
+
+    def _refresh_source_usage(self) -> None:
+        if not hasattr(self, "_mapping_source_list"):
+            return
+        zone = self._current_zone_for_mapping()
+        if zone is None:
+            return
+        dark = self._is_dark_theme()
+        active_color = QColor("#f0f0f0") if dark else QColor("#111111")
+        muted_color = QColor("#9a9a9a") if dark else QColor("#8a8a8a")
+        counts: dict[str, int] = {}
+        for mapping in zone.get("field_mappings", []):
+            mode = mapping.get("mode")
+            if mode == "simple":
+                src = mapping.get("source_col") or ""
+                if src:
+                    counts[src] = counts.get(src, 0) + 1
+            elif mode == "concat":
+                concat = mapping.get("concat") or {}
+                for src in concat.get("sources", []):
+                    col = src.get("col") or ""
+                    if col:
+                        counts[col] = counts.get(col, 0) + 1
+
+        for i in range(self._mapping_source_list.count()):
+            item = self._mapping_source_list.item(i)
+            if item is None:
+                continue
+            name = item.data(Qt.ItemDataRole.UserRole) or item.text()
+            count = counts.get(name, 0)
+            if count >= 2:
+                item.setText(f"{name} ({count})")
+            else:
+                item.setText(name)
+            if count >= 1:
+                item.setForeground(muted_color)
+            else:
+                item.setForeground(active_color)
 
     def _format_concat_summary(self, concat: dict[str, Any] | None) -> str:
         if not concat:
@@ -1782,6 +2000,7 @@ class TemplateBuilderScreen(QWidget):
         self._zones = []
         self._editing_zone_index = None
         self._current_mapping_cols = []
+        self._current_preview_col = None
         self._preview_frames = {}
         self._preview_cache_key = None
         self._preview_cache_frames = {}
@@ -1806,15 +2025,13 @@ class TemplateBuilderScreen(QWidget):
         self._source_table.model().set_dataframe(pd.DataFrame())
         self._template_label.setText("Template: —")
         self._source_label.setText("Source: —")
-        if hasattr(self, "_mapping_target_list"):
-            self._mapping_target_list.clear()
         if hasattr(self, "_mapping_source_list"):
             self._mapping_source_list.clear()
         if hasattr(self, "_concat_sources_list"):
             self._concat_sources_list.clear()
         self._clear_mapping_detail()
         if hasattr(self, "_mapping_preview_table"):
-            self._mapping_preview_table.model().set_dataframe(pd.DataFrame())
+            self._mapping_preview_table.clear()
         if hasattr(self, "_mapping_preview_label"):
             self._mapping_preview_label.setText("")
 

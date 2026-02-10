@@ -287,12 +287,24 @@ def _concat_from_group(group: pd.DataFrame, spec: ConcatFieldSpec) -> str:
         parts.extend(_concat_parts_from_row(row, spec))
     if spec.deduplicate:
         parts = _dedupe_keep_order(parts)
-    return spec.separator.join(parts) if parts else ""
+    sep = _normalize_separator(spec.separator)
+    return sep.join(parts) if parts else ""
 
 
 def _concat_from_row(row: pd.Series, spec: ConcatFieldSpec) -> str:
     parts = _concat_parts_from_row(row, spec)
-    return spec.separator.join(parts) if parts else ""
+    sep = _normalize_separator(spec.separator)
+    return sep.join(parts) if parts else ""
+
+
+def _normalize_separator(value: str | None) -> str:
+    if value is None:
+        return "; "
+    sep = str(value)
+    sep = sep.replace("\\r\\n", "\r\n")
+    sep = sep.replace("\\n", "\n")
+    sep = sep.replace("\\t", "\t")
+    return sep
 
 
 def _concat_parts_from_row(row: pd.Series, spec: ConcatFieldSpec) -> list[str]:
