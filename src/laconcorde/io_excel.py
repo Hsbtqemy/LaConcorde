@@ -147,7 +147,7 @@ def load_sheet(
             engine=read_engine,
             header=header_idx,
         )
-    return df  # type: ignore[return-value]
+        return df  # type: ignore[return-value]
     except Exception as e:
         raise ExcelFileError(f"Erreur feuille '{sheet_name}' dans {path}: {e}") from e
 
