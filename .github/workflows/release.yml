@@ -76,7 +76,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/windows-artifacts/LaConcordeSetup.exe
+            dist/windows-artifacts/installer/LaConcordeSetup.exe
             dist/windows-artifacts/LaConcordePortable.zip
             dist/macos-artifacts/LaConcorde.dmg
             dist/macos-artifacts/LaConcorde.app.zip
